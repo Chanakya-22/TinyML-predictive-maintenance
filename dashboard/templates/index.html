@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SOTA Industrial Cloud</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root { --bg: #0f172a; --card: #1e293b; --text: #e2e8f0; --accent: #38bdf8; --danger: #ef4444; --success: #22c55e; --warning: #f59e0b; }
+        body { margin: 0; font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); }
+        .navbar { background: var(--card); padding: 15px 30px; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; }
+        .logo { font-weight: bold; font-size: 1.5rem; color: var(--accent); }
+        .dashboard { display: grid; grid-template-columns: 1fr 2fr; gap: 20px; padding: 30px; max-width: 1400px; margin: 0 auto; }
+        .card { background: var(--card); border-radius: 12px; padding: 25px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+        
+        /* Digital Twin */
+        .twin-wrapper { display: flex; justify-content: center; padding: 20px; }
+        .motor-housing { width: 140px; height: 140px; border: 8px solid #475569; border-radius: 50%; position: relative; transition: all 0.3s; background: #334155; }
+        .shaft-inner { width: 40px; height: 40px; background: #94a3b8; border-radius: 50%; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 2; }
+        .fan-blade { width: 120px; height: 10px; background: var(--accent); position: absolute; top: 65px; left: 10px; border-radius: 5px; }
+        .fan-blade.vertical { transform: rotate(90deg); }
+
+        .spin { animation: spin 0.8s linear infinite; }
+        .shake { animation: shake 0.1s ease-in-out infinite; border-color: var(--danger); }
+        .shake .fan-blade { background: var(--danger); }
+
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        @keyframes shake { 0%, 100% { transform: translate(0, 0); } 25% { transform: translate(-2px, 2px); } 75% { transform: translate(2px, -2px); } }
+
+        .status-pill { padding: 10px; border-radius: 8px; font-weight: bold; text-align: center; margin-bottom: 10px; font-size: 1.1rem;}
+        .st-ok { background: rgba(34, 197, 94, 0.1); color: var(--success); border: 1px solid var(--success); }
+        .st-crit { background: rgba(239, 68, 68, 0.1); color: var(--danger); border: 1px solid var(--danger); }
+
+        .diagnostic-text { font-size: 0.95rem; color: #94a3b8; text-align: center; margin-top: 10px; font-weight: 500; }
+        .metric-row { display: flex; justify-content: space-between; border-bottom: 1px solid #334155; padding: 12px 0; }
+        .metric-val { font-weight: bold; font-family: monospace; font-size: 1.1rem; }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="logo">⚡ TinyML Industrial Cloud</div>
+        <div>SERVER STATUS: ONLINE</div>
+    </nav>
+
+    <div class="dashboard">
+        <!-- Left Panel: Digital Twin & Diagnostics -->
+        <div style="display: flex; flex-direction: column; gap: 20px;">
+            <div class="card">
+                <h2>Real-Time Diagnostics</h2>
+                <div class="twin-wrapper">
+                    <div id="motor" class="motor-housing spin">
+                        <div class="fan-blade"></div>
+                        <div class="fan-blade vertical"></div>
+                        <div class="shaft-inner"></div>
+                    </div>
+                </div>
+                <div id="statusPill" class="status-pill st-ok">SYSTEM HEALTHY</div>
+                <div id="diagnosticReason" class="diagnostic-text">System operating within normal parameters.</div>
+            </div>
+            
+            <div class="card">
+                <h2>Live Telemetry</h2>
+                <div class="metric-row">
+                    <span>RMS (Vibration)</span>
+                    <span id="rmsValue" class="metric-val">0.000 G</span>
+                </div>
+                <div class="metric-row">
+                    <span>Kurtosis (Impact)</span>
+                    <span id="kurtValue" class="metric-val">0.00</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Panel: Graph -->
+        <div class="card">
+            <h2>Vibration History</h2>
+            <canvas id="telemetryChart"></canvas>
+        </div>
+    </div>
+
+    <script>
+        const ctx = document.getElementById('telemetryChart').getContext('2d');
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: { 
+                labels: Array(40).fill(''), 
+                datasets: [{ 
+                    label: 'Vibration RMS', 
+                    data: Array(40).fill(0), 
+                    borderColor: '#38bdf8', 
+                    fill: true, 
+                    backgroundColor: 'rgba(56, 189, 248, 0.1)', 
+                    tension: 0.4,
+                    pointRadius: 0
+                }] 
+            },
+            options: { 
+                responsive: true, 
+                maintainAspectRatio: false, 
+                animation: false, 
+                scales: { 
+                    x: { display: false }, 
+                    y: { min: 0, suggestedMax: 0.5, grid: { color: '#334155' } } 
+                },
+                plugins: { legend: { display: false } }
+            }
+        });
+
+        async function updateDashboard() {
+            try {
+                const res = await fetch('/api/telemetry');
+                const data = await res.json();
+
+                // Update Metric Values
+                document.getElementById('rmsValue').innerText = `${data.rms} G`;
+                document.getElementById('kurtValue').innerText = data.kurtosis;
+                
+                // Update Logic (Digital Twin & Status)
+                const motor = document.getElementById('motor');
+                const pill = document.getElementById('statusPill');
+                const reason = document.getElementById('diagnosticReason');
+
+                // Update the Reason Text (Explainable AI)
+                reason.innerText = `Diagnostic: ${data.reason}`;
+
+                if (data.status_code === 1) {
+                    pill.innerText = "⚠️ CRITICAL FAULT"; 
+                    pill.className = "status-pill st-crit"; 
+                    motor.className = "motor-housing shake"; // Shake animation
+                    reason.style.color = "#ef4444";
+                } else {
+                    pill.innerText = "✅ SYSTEM HEALTHY"; 
+                    pill.className = "status-pill st-ok"; 
+                    motor.className = "motor-housing spin"; // Spin animation
+                    reason.style.color = "#22c55e";
+                }
+
+                // Update Chart
+                chart.data.labels.push(data.timestamp); 
+                chart.data.labels.shift();
+                chart.data.datasets[0].data.push(data.rms); 
+                chart.data.datasets[0].data.shift();
+                chart.update();
+            } catch (err) { console.error(err); }
+        }
+        setInterval(updateDashboard, 500); // Poll every 500ms
+    </script>
+</body>
+</html>
