@@ -3,183 +3,85 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Industry 4.0 | Asset Monitor</title>
+    <title>SOTA Asset Monitor</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <!-- Google Font for Industrial Look -->
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
     <style>
-        :root { 
-            --bg: #0b0e14; 
-            --card: #151a23; 
-            --text: #e2e8f0; 
-            --accent: #0ea5e9; 
-            --danger: #ef4444; 
-            --success: #22c55e; 
-            --warning: #f59e0b; 
-            --border: #1e293b;
-        }
-        
+        :root { --bg: #0b0e14; --card: #151a23; --text: #e2e8f0; --accent: #0ea5e9; --danger: #ef4444; --success: #22c55e; --warning: #f59e0b; --border: #1e293b; }
         body { margin: 0; font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); overflow-x: hidden; }
         
-        /* Navbar */
-        .navbar { 
-            background: rgba(21, 26, 35, 0.95); 
-            padding: 15px 40px; 
-            border-bottom: 1px solid var(--border); 
-            display: flex; 
-            justify-content: space-between; 
-            align-items: center; 
-            backdrop-filter: blur(10px);
-            position: sticky;
-            top: 0;
-            z-index: 100;
-        }
-        .logo { font-weight: 700; font-size: 1.4rem; color: #fff; letter-spacing: -0.5px; display: flex; align-items: center; gap: 12px; }
+        .navbar { background: rgba(21, 26, 35, 0.95); padding: 15px 40px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 100; backdrop-filter: blur(10px); }
+        .logo { font-weight: 700; font-size: 1.4rem; color: #fff; display: flex; align-items: center; gap: 12px; }
         .logo span { color: var(--accent); }
-        .status-badge { font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; background: #1e293b; padding: 4px 12px; border-radius: 4px; color: var(--accent); }
+        
+        .dashboard { display: grid; grid-template-columns: 350px 1fr; gap: 25px; padding: 30px 40px; max-width: 1800px; margin: 0 auto; }
+        .card { background: var(--card); border-radius: 12px; padding: 25px; border: 1px solid var(--border); box-shadow: 0 4px 6px rgba(0,0,0,0.3); display: flex; flex-direction: column; }
+        h2 { color: #94a3b8; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1.2px; margin: 0 0 20px 0; font-weight: 600; border-bottom: 1px solid var(--border); padding-bottom: 10px; }
 
-        /* Layout */
-        .dashboard { 
-            display: grid; 
-            grid-template-columns: 350px 1fr; 
-            gap: 25px; 
-            padding: 30px 40px; 
-            max-width: 1800px; 
-            margin: 0 auto; 
-        }
-        
-        .card { 
-            background: var(--card); 
-            border-radius: 12px; 
-            padding: 25px; 
-            border: 1px solid var(--border); 
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-            display: flex;
-            flex-direction: column;
-        }
-        
-        h2 { 
-            color: #94a3b8; 
-            font-size: 0.85rem; 
-            text-transform: uppercase; 
-            letter-spacing: 1.2px; 
-            margin-top: 0; 
-            margin-bottom: 20px; 
-            font-weight: 600;
-            display: flex;
-            justify-content: space-between;
-        }
-
-        /* Digital Twin Animation */
-        .twin-container { 
-            display: flex; 
-            justify-content: center; 
-            align-items: center; 
-            height: 250px; 
-            position: relative;
-            background: radial-gradient(circle at center, #1e293b 0%, transparent 70%);
-        }
-        
-        .motor-housing { 
-            width: 180px; 
-            height: 180px; 
-            border: 6px solid #475569; 
-            border-radius: 50%; 
-            position: relative; 
-            transition: all 0.5s ease; 
-            background: #0f172a;
-            z-index: 10;
-        }
-        
-        .fan-blade { 
-            width: 160px; 
-            height: 16px; 
-            background: var(--accent); 
-            position: absolute; 
-            top: 82px; 
-            left: 10px; 
-            border-radius: 4px; 
-            box-shadow: 0 0 15px rgba(14, 165, 233, 0.4);
-        }
+        /* Digital Twin */
+        .twin-container { display: flex; justify-content: center; align-items: center; height: 220px; background: radial-gradient(circle at center, #1e293b 0%, transparent 70%); }
+        .motor-housing { width: 160px; height: 160px; border: 6px solid #475569; border-radius: 50%; position: relative; background: #0f172a; transition: all 0.3s; }
+        .fan-blade { width: 140px; height: 14px; background: var(--accent); position: absolute; top: 73px; left: 10px; border-radius: 4px; box-shadow: 0 0 15px rgba(14, 165, 233, 0.4); }
         .fan-blade.vertical { transform: rotate(90deg); }
-
         .spin { animation: spin 0.6s linear infinite; }
-        .shake { animation: shake 0.1s ease-in-out infinite; border-color: var(--danger); box-shadow: 0 0 30px rgba(239, 68, 68, 0.2); }
+        .shake { animation: shake 0.1s ease-in-out infinite; border-color: var(--danger); }
         .shake .fan-blade { background: var(--danger); box-shadow: 0 0 15px var(--danger); }
-
         @keyframes spin { 100% { transform: rotate(360deg); } }
         @keyframes shake { 0%, 100% { transform: translate(0, 0); } 25% { transform: translate(-2px, 2px); } 75% { transform: translate(2px, -2px); } }
 
-        /* Metric Tiles */
+        /* Metrics */
         .metric-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: auto; }
-        .metric-tile { background: #0b0e14; padding: 15px; border-radius: 8px; border: 1px solid var(--border); }
+        .metric-tile { background: #0b0e14; padding: 15px; border-radius: 8px; border: 1px solid var(--border); text-align: center; }
         .metric-value { font-family: 'JetBrains Mono', monospace; font-size: 1.4rem; font-weight: 700; color: #fff; display: block; }
         .metric-label { font-size: 0.75rem; color: #64748b; margin-top: 5px; display: block; }
 
         /* AI Panel */
-        .ai-panel { 
-            background: linear-gradient(145deg, #151a23 0%, #0f172a 100%);
-            border-left: 3px solid var(--accent); 
-            min-height: 120px;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            padding: 20px;
-            margin-bottom: 20px;
-        }
-        .ai-title { color: var(--accent); font-weight: 700; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+        .ai-panel { background: linear-gradient(145deg, #151a23 0%, #0f172a 100%); border-left: 3px solid var(--accent); padding: 20px; border-radius: 0 8px 8px 0; min-height: 100px; display: flex; align-items: center; gap: 15px; }
         .ai-text { font-family: 'JetBrains Mono', monospace; font-size: 0.9rem; line-height: 1.6; white-space: pre-line; color: #cbd5e1; }
 
-        /* Chart Container */
-        .chart-wrapper { position: relative; height: 350px; width: 100%; }
+        /* Event Log Table */
+        .log-container { height: 150px; overflow-y: auto; background: #0b0e14; border-radius: 8px; border: 1px solid var(--border); font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; padding: 10px; }
+        .log-entry { margin-bottom: 5px; padding-bottom: 5px; border-bottom: 1px solid #1e293b; color: #94a3b8; display: flex; gap: 10px; }
+        .log-ts { color: var(--accent); }
+        .log-msg-crit { color: var(--danger); font-weight: bold; }
+        .log-msg-ok { color: var(--success); }
 
-        /* Status Pills */
-        .status-pill { 
-            text-align: center; 
-            padding: 12px; 
-            border-radius: 6px; 
-            font-weight: 700; 
-            letter-spacing: 1px; 
-            margin-top: 20px;
-            font-size: 0.9rem;
-            transition: all 0.3s;
-        }
-        .st-ok { background: rgba(34, 197, 94, 0.1); color: var(--success); border: 1px solid rgba(34, 197, 94, 0.3); }
-        .st-crit { background: rgba(239, 68, 68, 0.1); color: var(--danger); border: 1px solid rgba(239, 68, 68, 0.3); animation: pulse 2s infinite; }
-        .st-boot { background: rgba(245, 158, 11, 0.1); color: var(--warning); border: 1px solid rgba(245, 158, 11, 0.3); }
-
-        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); } 70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); } 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); } }
+        /* Chart */
+        .chart-wrapper { height: 300px; width: 100%; position: relative; }
+        
+        .status-pill { text-align: center; padding: 10px; border-radius: 6px; font-weight: 700; margin-top: 15px; font-size: 0.9rem; letter-spacing: 1px; }
+        .st-ok { background: rgba(34, 197, 94, 0.1); color: var(--success); border: 1px solid var(--success); }
+        .st-crit { background: rgba(239, 68, 68, 0.1); color: var(--danger); border: 1px solid var(--danger); animation: pulse 1s infinite; }
+        .st-boot { background: rgba(245, 158, 11, 0.1); color: var(--warning); border: 1px solid var(--warning); }
+        @keyframes pulse { 50% { opacity: 0.6; } }
     </style>
 </head>
 <body>
     <nav class="navbar">
-        <div class="logo">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
-            <span>Asset</span>Guard AI
-        </div>
-        <div class="status-badge">● LIVE STREAM: CONNECTED</div>
+        <div class="logo"><span>⚡</span> AssetGuard AI</div>
+        <div style="font-family: 'JetBrains Mono'; font-size: 0.8rem; color: #64748b;">SYSTEM ID: AG-9002</div>
     </nav>
 
     <div class="dashboard">
-        <!-- Sidebar: Digital Twin & Metrics -->
+        <!-- Sidebar -->
         <div style="display: flex; flex-direction: column; gap: 20px;">
             <div class="card">
-                <h2>Asset ID: MTR-09-X</h2>
+                <h2>Digital Twin Status</h2>
                 <div class="twin-container">
                     <div id="motor" class="motor-housing spin">
                         <div class="fan-blade"></div>
                         <div class="fan-blade vertical"></div>
                     </div>
                 </div>
-                <div id="statusPill" class="status-pill st-boot">SYSTEM BOOTING...</div>
+                <div id="statusPill" class="status-pill st-boot">INITIALIZING</div>
             </div>
 
             <div class="card" style="flex-grow: 1;">
-                <h2>Real-Time Metrics</h2>
+                <h2>Live Telemetry</h2>
                 <div class="metric-grid">
                     <div class="metric-tile">
                         <span class="metric-value" id="rmsValue">0.000</span>
-                        <span class="metric-label">Vibration (g)</span>
+                        <span class="metric-label">RMS (g)</span>
                     </div>
                     <div class="metric-tile">
                         <span class="metric-value" id="kurtValue">0.0</span>
@@ -187,143 +89,135 @@
                     </div>
                     <div class="metric-tile">
                         <span class="metric-value" id="tempValue">0.0°C</span>
-                        <span class="metric-label">Temperature</span>
+                        <span class="metric-label">Temp</span>
                     </div>
                     <div class="metric-tile">
                         <span class="metric-value" id="speedValue">0</span>
-                        <span class="metric-label">Speed (RPM)</span>
+                        <span class="metric-label">RPM</span>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Main Content: AI & Charts -->
+        <!-- Main Content -->
         <div style="display: flex; flex-direction: column; gap: 20px;">
             <div class="card">
-                <h2>Diagnostics & Recommendations</h2>
+                <h2>AI Diagnostic Center</h2>
                 <div class="ai-panel">
-                    <div class="ai-title">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
-                        AI Maintenance Assistant
-                    </div>
-                    <div class="ai-text" id="aiReason">Waiting for telemetry data...</div>
+                    <div style="font-size: 2rem; margin-right: 15px;">🤖</div>
+                    <div class="ai-text" id="aiReason">System initializing...</div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Vibration Spectrum Analysis</h2>
+                <div class="chart-wrapper">
+                    <canvas id="telemetryChart"></canvas>
                 </div>
             </div>
 
             <div class="card" style="flex-grow: 1;">
-                <h2>Vibration Signature Analysis</h2>
-                <div class="chart-wrapper">
-                    <canvas id="telemetryChart"></canvas>
+                <h2>System Event Log</h2>
+                <div class="log-container" id="eventLog">
+                    <!-- Logs go here -->
                 </div>
             </div>
         </div>
     </div>
 
     <script>
-        // --- CHART CONFIGURATION ---
+        // --- CHART SETUP ---
         const ctx = document.getElementById('telemetryChart').getContext('2d');
-        
-        // Gradient for visual depth
-        const gradient = ctx.createLinearGradient(0, 0, 0, 400);
+        const gradient = ctx.createLinearGradient(0, 0, 0, 300);
         gradient.addColorStop(0, 'rgba(14, 165, 233, 0.4)');
         gradient.addColorStop(1, 'rgba(14, 165, 233, 0.0)');
+
+        // Pre-fill chart with empty data so it scrolls nicely from right
+        const initialData = Array(60).fill(0);
+        const initialLabels = Array(60).fill('');
 
         const chart = new Chart(ctx, {
             type: 'line',
             data: { 
-                labels: Array(60).fill(''), // 60 data points (1 minute history)
+                labels: initialLabels,
                 datasets: [{ 
-                    label: 'RMS Acceleration (g)', 
-                    data: Array(60).fill(0), 
-                    borderColor: '#0ea5e9', 
-                    borderWidth: 2,
-                    backgroundColor: gradient,
-                    fill: true, 
-                    tension: 0.4, // Smooth curve
-                    pointRadius: 0, // Hide points for clean look
-                    pointHoverRadius: 4
+                    label: 'RMS Vibration', 
+                    data: initialData, 
+                    borderColor: '#0ea5e9', borderWidth: 2, backgroundColor: gradient, fill: true, tension: 0.4, pointRadius: 0 
                 }] 
             },
             options: { 
-                responsive: true, 
-                maintainAspectRatio: false, 
-                animation: false, // Critical for performance
-                interaction: { intersect: false, mode: 'index' },
-                scales: { 
-                    x: { display: false }, 
-                    y: { 
-                        min: 0, 
-                        suggestedMax: 0.6, 
-                        grid: { color: '#1e293b' },
-                        ticks: { color: '#64748b' }
-                    } 
-                },
+                responsive: true, maintainAspectRatio: false, animation: false,
+                scales: { x: { display: false }, y: { min: 0, suggestedMax: 0.6, grid: { color: '#1e293b' } } },
                 plugins: { legend: { display: false } }
             }
         });
 
-        // --- DATA POLLING ---
+        let lastStatus = "";
+
         async function updateDashboard() {
             try {
                 const res = await fetch('/api/telemetry');
                 const data = await res.json();
 
-                // 1. Update Numeric Metrics
+                // 1. Metrics
                 document.getElementById('rmsValue').innerText = data.rms.toFixed(3);
                 document.getElementById('kurtValue').innerText = data.kurtosis.toFixed(1);
                 document.getElementById('tempValue').innerText = data.temp.toFixed(1) + "°C";
                 document.getElementById('speedValue').innerText = data.speed;
-                
-                // 2. Update AI Text
-                const aiText = document.getElementById('aiReason');
-                aiText.innerText = data.recommendation;
+                document.getElementById('aiReason').innerText = data.recommendation;
 
-                // 3. Update Visual State (Digital Twin)
+                // 2. Visuals & Log
                 const motor = document.getElementById('motor');
                 const pill = document.getElementById('statusPill');
                 
-                // Remove all classes first to reset state
+                // Clear classes
                 pill.classList.remove('st-ok', 'st-crit', 'st-boot');
                 motor.classList.remove('spin', 'shake');
 
+                let statusMsg = "";
+                
                 if (data.status === "INITIALIZING") {
-                    pill.innerText = "SYSTEM BOOTING";
-                    pill.classList.add('st-boot');
-                    motor.classList.add('spin'); // Spin slowly
-                    motor.style.animationDuration = '2s';
-                }
+                    pill.innerText = "BOOTING"; pill.classList.add('st-boot');
+                    motor.classList.add('spin'); motor.style.animationDuration = '2s';
+                    chart.data.datasets[0].borderColor = '#f59e0b'; // Yellow
+                    statusMsg = "System Boot Sequence";
+                } 
                 else if (data.status_code === 1) {
-                    // FAULT
-                    pill.innerText = "CRITICAL FAULT"; 
-                    pill.classList.add('st-crit'); 
+                    pill.innerText = "CRITICAL FAULT"; pill.classList.add('st-crit');
                     motor.classList.add('shake');
-                    
-                    // Chart Color Change (Red)
-                    chart.data.datasets[0].borderColor = '#ef4444';
+                    chart.data.datasets[0].borderColor = '#ef4444'; // Red
                     chart.data.datasets[0].backgroundColor = 'rgba(239, 68, 68, 0.2)';
-                } else {
-                    // HEALTHY
-                    pill.innerText = "SYSTEM OPTIMAL"; 
-                    pill.classList.add('st-ok'); 
-                    motor.classList.add('spin');
-                    motor.style.animationDuration = '0.6s'; // Fast spin
-                    
-                    // Chart Color Reset (Blue)
-                    chart.data.datasets[0].borderColor = '#0ea5e9';
+                    statusMsg = `FAULT DETECTED: ${data.mode}`;
+                } 
+                else {
+                    pill.innerText = "OPTIMAL"; pill.classList.add('st-ok');
+                    motor.classList.add('spin'); motor.style.animationDuration = '0.6s';
+                    chart.data.datasets[0].borderColor = '#0ea5e9'; // Blue
                     chart.data.datasets[0].backgroundColor = gradient;
+                    statusMsg = "System Healthy";
                 }
 
-                // 4. Update Chart Data
-                chart.data.labels.push(data.timestamp); 
+                // 3. Log Update (Only on change)
+                if (statusMsg !== lastStatus) {
+                    const logContainer = document.getElementById('eventLog');
+                    const entry = document.createElement('div');
+                    entry.className = 'log-entry';
+                    const colorClass = data.status_code === 1 ? 'log-msg-crit' : 'log-msg-ok';
+                    entry.innerHTML = `<span class="log-ts">[${data.timestamp}]</span> <span class="${colorClass}">${statusMsg}</span>`;
+                    logContainer.prepend(entry); // Add to top
+                    lastStatus = statusMsg;
+                }
+
+                // 4. Chart Update
+                chart.data.labels.push(data.timestamp);
                 chart.data.labels.shift();
-                chart.data.datasets[0].data.push(data.rms); 
+                chart.data.datasets[0].data.push(data.rms);
                 chart.data.datasets[0].data.shift();
                 chart.update();
 
-            } catch (err) { console.error("Data Stream Interrupted", err); }
+            } catch (err) { console.error("Stream Error", err); }
         }
-        
-        // Poll every 500ms (2Hz refresh rate)
         setInterval(updateDashboard, 500);
     </script>
 </body>
