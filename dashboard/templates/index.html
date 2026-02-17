@@ -2,204 +2,328 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Smart HVAC Monitor | AI Mechanic</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Industry 4.0 | Asset Monitor</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Google Font for Industrial Look -->
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@400;600&display=swap" rel="stylesheet">
     <style>
-        :root { --bg: #0f172a; --card: #1e293b; --text: #e2e8f0; --accent: #38bdf8; --danger: #ef4444; --success: #22c55e; --warning: #f59e0b; }
-        body { margin: 0; font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); overflow-x: hidden;}
+        :root { 
+            --bg: #0b0e14; 
+            --card: #151a23; 
+            --text: #e2e8f0; 
+            --accent: #0ea5e9; 
+            --danger: #ef4444; 
+            --success: #22c55e; 
+            --warning: #f59e0b; 
+            --border: #1e293b;
+        }
         
-        .navbar { background: var(--card); padding: 15px 30px; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; }
-        .logo { font-weight: bold; font-size: 1.5rem; color: var(--accent); display: flex; align-items: center; gap: 10px;}
+        body { margin: 0; font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); overflow-x: hidden; }
         
-        .dashboard { display: grid; grid-template-columns: 1fr 2fr; gap: 20px; padding: 30px; max-width: 1600px; margin: 0 auto; }
-        .card { background: var(--card); border-radius: 16px; padding: 25px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2); border: 1px solid #334155; }
-        
-        h2 { color: #94a3b8; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 1px; margin-top: 0; margin-bottom: 20px; border-bottom: 1px solid #334155; padding-bottom: 10px;}
+        /* Navbar */
+        .navbar { 
+            background: rgba(21, 26, 35, 0.95); 
+            padding: 15px 40px; 
+            border-bottom: 1px solid var(--border); 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            backdrop-filter: blur(10px);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .logo { font-weight: 700; font-size: 1.4rem; color: #fff; letter-spacing: -0.5px; display: flex; align-items: center; gap: 12px; }
+        .logo span { color: var(--accent); }
+        .status-badge { font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; background: #1e293b; padding: 4px 12px; border-radius: 4px; color: var(--accent); }
 
-        /* Digital Twin */
-        .twin-wrapper { display: flex; justify-content: center; padding: 20px; position: relative; }
-        .motor-housing { width: 160px; height: 160px; border: 8px solid #475569; border-radius: 50%; position: relative; transition: all 0.3s; background: #334155; box-shadow: inset 0 0 20px rgba(0,0,0,0.5); }
-        .shaft-inner { width: 40px; height: 40px; background: #94a3b8; border-radius: 50%; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 2; border: 2px solid #fff; }
-        .fan-blade { width: 140px; height: 12px; background: var(--accent); position: absolute; top: 74px; left: 10px; border-radius: 6px; box-shadow: 0 0 10px var(--accent); }
+        /* Layout */
+        .dashboard { 
+            display: grid; 
+            grid-template-columns: 350px 1fr; 
+            gap: 25px; 
+            padding: 30px 40px; 
+            max-width: 1800px; 
+            margin: 0 auto; 
+        }
+        
+        .card { 
+            background: var(--card); 
+            border-radius: 12px; 
+            padding: 25px; 
+            border: 1px solid var(--border); 
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            display: flex;
+            flex-direction: column;
+        }
+        
+        h2 { 
+            color: #94a3b8; 
+            font-size: 0.85rem; 
+            text-transform: uppercase; 
+            letter-spacing: 1.2px; 
+            margin-top: 0; 
+            margin-bottom: 20px; 
+            font-weight: 600;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        /* Digital Twin Animation */
+        .twin-container { 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            height: 250px; 
+            position: relative;
+            background: radial-gradient(circle at center, #1e293b 0%, transparent 70%);
+        }
+        
+        .motor-housing { 
+            width: 180px; 
+            height: 180px; 
+            border: 6px solid #475569; 
+            border-radius: 50%; 
+            position: relative; 
+            transition: all 0.5s ease; 
+            background: #0f172a;
+            z-index: 10;
+        }
+        
+        .fan-blade { 
+            width: 160px; 
+            height: 16px; 
+            background: var(--accent); 
+            position: absolute; 
+            top: 82px; 
+            left: 10px; 
+            border-radius: 4px; 
+            box-shadow: 0 0 15px rgba(14, 165, 233, 0.4);
+        }
         .fan-blade.vertical { transform: rotate(90deg); }
 
-        .spin { animation: spin 0.8s linear infinite; }
-        .shake { animation: shake 0.1s ease-in-out infinite; border-color: var(--danger); }
+        .spin { animation: spin 0.6s linear infinite; }
+        .shake { animation: shake 0.1s ease-in-out infinite; border-color: var(--danger); box-shadow: 0 0 30px rgba(239, 68, 68, 0.2); }
         .shake .fan-blade { background: var(--danger); box-shadow: 0 0 15px var(--danger); }
 
         @keyframes spin { 100% { transform: rotate(360deg); } }
-        @keyframes shake { 0%, 100% { transform: translate(0, 0); } 25% { transform: translate(-3px, 3px); } 75% { transform: translate(3px, -3px); } }
+        @keyframes shake { 0%, 100% { transform: translate(0, 0); } 25% { transform: translate(-2px, 2px); } 75% { transform: translate(2px, -2px); } }
 
-        /* Metrics Grid */
-        .metrics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px; }
-        .metric-box { background: #0f172a; padding: 15px; border-radius: 8px; text-align: center; }
-        .metric-val { font-size: 1.5rem; font-weight: bold; display: block; }
-        .metric-label { font-size: 0.8rem; color: #64748b; }
+        /* Metric Tiles */
+        .metric-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: auto; }
+        .metric-tile { background: #0b0e14; padding: 15px; border-radius: 8px; border: 1px solid var(--border); }
+        .metric-value { font-family: 'JetBrains Mono', monospace; font-size: 1.4rem; font-weight: 700; color: #fff; display: block; }
+        .metric-label { font-size: 0.75rem; color: #64748b; margin-top: 5px; display: block; }
 
-        /* AI Assistant Box */
-        .ai-assistant { background: #0f172a; border-left: 4px solid var(--accent); padding: 20px; border-radius: 0 8px 8px 0; min-height: 100px; display: flex; align-items: center; gap: 15px; }
-        .ai-icon { font-size: 2rem; }
-        .ai-text { font-size: 1rem; line-height: 1.5; white-space: pre-line; } /* pre-line handles \n line breaks */
-        
-        .status-pill { padding: 12px; border-radius: 8px; font-weight: bold; text-align: center; font-size: 1.2rem; margin-top: 20px;}
-        .st-ok { background: rgba(34, 197, 94, 0.15); color: var(--success); border: 1px solid var(--success); box-shadow: 0 0 15px rgba(34, 197, 94, 0.1); }
-        .st-crit { background: rgba(239, 68, 68, 0.15); color: var(--danger); border: 1px solid var(--danger); box-shadow: 0 0 15px rgba(239, 68, 68, 0.1); animation: pulse 1s infinite; }
+        /* AI Panel */
+        .ai-panel { 
+            background: linear-gradient(145deg, #151a23 0%, #0f172a 100%);
+            border-left: 3px solid var(--accent); 
+            min-height: 120px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .ai-title { color: var(--accent); font-weight: 700; margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+        .ai-text { font-family: 'JetBrains Mono', monospace; font-size: 0.9rem; line-height: 1.6; white-space: pre-line; color: #cbd5e1; }
 
-        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.8; } 100% { opacity: 1; } }
+        /* Chart Container */
+        .chart-wrapper { position: relative; height: 350px; width: 100%; }
+
+        /* Status Pills */
+        .status-pill { 
+            text-align: center; 
+            padding: 12px; 
+            border-radius: 6px; 
+            font-weight: 700; 
+            letter-spacing: 1px; 
+            margin-top: 20px;
+            font-size: 0.9rem;
+            transition: all 0.3s;
+        }
+        .st-ok { background: rgba(34, 197, 94, 0.1); color: var(--success); border: 1px solid rgba(34, 197, 94, 0.3); }
+        .st-crit { background: rgba(239, 68, 68, 0.1); color: var(--danger); border: 1px solid rgba(239, 68, 68, 0.3); animation: pulse 2s infinite; }
+        .st-boot { background: rgba(245, 158, 11, 0.1); color: var(--warning); border: 1px solid rgba(245, 158, 11, 0.3); }
+
+        @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); } 70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); } 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); } }
     </style>
 </head>
 <body>
     <nav class="navbar">
-        <div class="logo"><span>🤖</span> Smart HVAC Monitor</div>
-        <div style="font-family: monospace; color: var(--accent);">V 2.4.0 (SOTA)</div>
+        <div class="logo">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+            <span>Asset</span>Guard AI
+        </div>
+        <div class="status-badge">● LIVE STREAM: CONNECTED</div>
     </nav>
 
     <div class="dashboard">
-        <!-- Left Panel: Diagnostics & Twin -->
+        <!-- Sidebar: Digital Twin & Metrics -->
         <div style="display: flex; flex-direction: column; gap: 20px;">
-            
-            <!-- Digital Twin Card -->
             <div class="card">
-                <h2>Real-Time Digital Twin</h2>
-                <div class="twin-wrapper">
+                <h2>Asset ID: MTR-09-X</h2>
+                <div class="twin-container">
                     <div id="motor" class="motor-housing spin">
                         <div class="fan-blade"></div>
                         <div class="fan-blade vertical"></div>
-                        <div class="shaft-inner"></div>
                     </div>
                 </div>
-                <div id="statusPill" class="status-pill st-ok">SYSTEM OPTIMAL</div>
+                <div id="statusPill" class="status-pill st-boot">SYSTEM BOOTING...</div>
             </div>
 
-            <!-- Key Metrics Card -->
-            <div class="card">
-                <h2>Sensor Telemetry</h2>
-                <div class="metrics-grid">
-                    <div class="metric-box">
-                        <span class="metric-val" id="rmsValue">0.00 G</span>
-                        <span class="metric-label">Vibration (RMS)</span>
+            <div class="card" style="flex-grow: 1;">
+                <h2>Real-Time Metrics</h2>
+                <div class="metric-grid">
+                    <div class="metric-tile">
+                        <span class="metric-value" id="rmsValue">0.000</span>
+                        <span class="metric-label">Vibration (g)</span>
                     </div>
-                    <div class="metric-box">
-                        <span class="metric-val" id="tempValue">45 °C</span>
+                    <div class="metric-tile">
+                        <span class="metric-value" id="kurtValue">0.0</span>
+                        <span class="metric-label">Kurtosis</span>
+                    </div>
+                    <div class="metric-tile">
+                        <span class="metric-value" id="tempValue">0.0°C</span>
                         <span class="metric-label">Temperature</span>
                     </div>
-                    <div class="metric-box">
-                        <span class="metric-val" id="kurtValue">2.0</span>
-                        <span class="metric-label">Impact Factor</span>
-                    </div>
-                    <div class="metric-box">
-                        <span class="metric-val" style="color: var(--accent);">98%</span>
-                        <span class="metric-label">Health Score</span>
+                    <div class="metric-tile">
+                        <span class="metric-value" id="speedValue">0</span>
+                        <span class="metric-label">Speed (RPM)</span>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Right Panel: AI Assistant & Charts -->
+        <!-- Main Content: AI & Charts -->
         <div style="display: flex; flex-direction: column; gap: 20px;">
-            
-            <!-- AI Mechanic Box -->
-            <div class="card" style="border-color: var(--accent);">
-                <h2 style="color: var(--accent); border-color: var(--accent);">🔧 AI Maintenance Assistant</h2>
-                <div class="ai-assistant">
-                    <div class="ai-icon">🤖</div>
-                    <div class="ai-text" id="aiReason">
-                        System is analyzing telemetry data...
+            <div class="card">
+                <h2>Diagnostics & Recommendations</h2>
+                <div class="ai-panel">
+                    <div class="ai-title">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+                        AI Maintenance Assistant
                     </div>
+                    <div class="ai-text" id="aiReason">Waiting for telemetry data...</div>
                 </div>
             </div>
 
-            <!-- Live Chart -->
             <div class="card" style="flex-grow: 1;">
-                <h2>Live Vibration Signature</h2>
-                <canvas id="telemetryChart"></canvas>
+                <h2>Vibration Signature Analysis</h2>
+                <div class="chart-wrapper">
+                    <canvas id="telemetryChart"></canvas>
+                </div>
             </div>
         </div>
     </div>
 
     <script>
-        // Chart Config
+        // --- CHART CONFIGURATION ---
         const ctx = document.getElementById('telemetryChart').getContext('2d');
+        
+        // Gradient for visual depth
         const gradient = ctx.createLinearGradient(0, 0, 0, 400);
-        gradient.addColorStop(0, 'rgba(56, 189, 248, 0.5)');
-        gradient.addColorStop(1, 'rgba(56, 189, 248, 0.0)');
+        gradient.addColorStop(0, 'rgba(14, 165, 233, 0.4)');
+        gradient.addColorStop(1, 'rgba(14, 165, 233, 0.0)');
 
         const chart = new Chart(ctx, {
             type: 'line',
             data: { 
-                labels: Array(50).fill(''), 
+                labels: Array(60).fill(''), // 60 data points (1 minute history)
                 datasets: [{ 
-                    label: 'Vibration Amplitude', 
-                    data: Array(50).fill(0), 
-                    borderColor: '#38bdf8', 
+                    label: 'RMS Acceleration (g)', 
+                    data: Array(60).fill(0), 
+                    borderColor: '#0ea5e9', 
                     borderWidth: 2,
                     backgroundColor: gradient,
                     fill: true, 
-                    tension: 0.4,
-                    pointRadius: 0
+                    tension: 0.4, // Smooth curve
+                    pointRadius: 0, // Hide points for clean look
+                    pointHoverRadius: 4
                 }] 
             },
             options: { 
                 responsive: true, 
                 maintainAspectRatio: false, 
-                animation: false, 
+                animation: false, // Critical for performance
+                interaction: { intersect: false, mode: 'index' },
                 scales: { 
                     x: { display: false }, 
-                    y: { min: 0, suggestedMax: 0.6, grid: { color: '#334155' } } 
+                    y: { 
+                        min: 0, 
+                        suggestedMax: 0.6, 
+                        grid: { color: '#1e293b' },
+                        ticks: { color: '#64748b' }
+                    } 
                 },
                 plugins: { legend: { display: false } }
             }
         });
 
+        // --- DATA POLLING ---
         async function updateDashboard() {
             try {
                 const res = await fetch('/api/telemetry');
                 const data = await res.json();
 
-                // Update Values
-                document.getElementById('rmsValue').innerText = `${data.rms} G`;
-                document.getElementById('kurtValue').innerText = data.kurtosis;
-                document.getElementById('tempValue').innerText = `${data.temp} °C`;
+                // 1. Update Numeric Metrics
+                document.getElementById('rmsValue').innerText = data.rms.toFixed(3);
+                document.getElementById('kurtValue').innerText = data.kurtosis.toFixed(1);
+                document.getElementById('tempValue').innerText = data.temp.toFixed(1) + "°C";
+                document.getElementById('speedValue').innerText = data.speed;
                 
-                // Update AI Assistant Text
+                // 2. Update AI Text
                 const aiText = document.getElementById('aiReason');
                 aiText.innerText = data.recommendation;
 
-                // Update Visuals based on Status
+                // 3. Update Visual State (Digital Twin)
                 const motor = document.getElementById('motor');
                 const pill = document.getElementById('statusPill');
+                
+                // Remove all classes first to reset state
+                pill.classList.remove('st-ok', 'st-crit', 'st-boot');
+                motor.classList.remove('spin', 'shake');
 
-                if (data.status_code === 1) {
-                    // FAULT MODE
-                    pill.innerText = "⚠️ ANOMALY DETECTED"; 
-                    pill.className = "status-pill st-crit"; 
-                    motor.className = "motor-housing shake";
+                if (data.status === "INITIALIZING") {
+                    pill.innerText = "SYSTEM BOOTING";
+                    pill.classList.add('st-boot');
+                    motor.classList.add('spin'); // Spin slowly
+                    motor.style.animationDuration = '2s';
+                }
+                else if (data.status_code === 1) {
+                    // FAULT
+                    pill.innerText = "CRITICAL FAULT"; 
+                    pill.classList.add('st-crit'); 
+                    motor.classList.add('shake');
                     
-                    // Update chart color to red for visual flair
+                    // Chart Color Change (Red)
                     chart.data.datasets[0].borderColor = '#ef4444';
                     chart.data.datasets[0].backgroundColor = 'rgba(239, 68, 68, 0.2)';
                 } else {
-                    // HEALTHY MODE
-                    pill.innerText = "✅ SYSTEM OPTIMAL"; 
-                    pill.className = "status-pill st-ok"; 
-                    motor.className = "motor-housing spin";
+                    // HEALTHY
+                    pill.innerText = "SYSTEM OPTIMAL"; 
+                    pill.classList.add('st-ok'); 
+                    motor.classList.add('spin');
+                    motor.style.animationDuration = '0.6s'; // Fast spin
                     
-                    // Reset chart color
-                    chart.data.datasets[0].borderColor = '#38bdf8';
+                    // Chart Color Reset (Blue)
+                    chart.data.datasets[0].borderColor = '#0ea5e9';
                     chart.data.datasets[0].backgroundColor = gradient;
                 }
 
-                // Push Data to Chart
+                // 4. Update Chart Data
                 chart.data.labels.push(data.timestamp); 
                 chart.data.labels.shift();
                 chart.data.datasets[0].data.push(data.rms); 
                 chart.data.datasets[0].data.shift();
                 chart.update();
 
-            } catch (err) { console.error("Server Disconnected", err); }
+            } catch (err) { console.error("Data Stream Interrupted", err); }
         }
         
-        // Fast polling for smooth animation
+        // Poll every 500ms (2Hz refresh rate)
         setInterval(updateDashboard, 500);
     </script>
 </body>
