@@ -1,148 +1,283 @@
 import numpy as np
 import pandas as pd
 import joblib
-from scipy.fft import fft
-from sklearn.ensemble import GradientBoostingClassifier
+import os
+from scipy.fft import fft, fftfreq
+from sklearn.ensemble import GradientBoostingClassifier, IsolationForest
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, confusion_matrix
+from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
+from sklearn.preprocessing import LabelEncoder
+import matplotlib
+matplotlib.use('Agg')  # Non-interactive backend (safe for servers)
 import matplotlib.pyplot as plt
 import seaborn as sns
-import os
 
-# --- 1. HYPER-REALISTIC PHYSICS GENERATOR (Harder Difficulty) ---
-def generate_bearing_signal(is_faulty=False, sample_rate=20000, duration=0.5):
-    t = np.linspace(0, duration, int(sample_rate * duration))
-    
-    # Base Shaft Rotation (30 Hz)
-    base_signal = 0.05 * np.sin(2 * np.pi * 30 * t)
-    
-    # --- AGGRESSIVE NOISE & OVERLAP (Targeting ~92-96% Accuracy) ---
-    if not is_faulty:
-        # Healthy Motor
-        # 30% chance of being "High Noise" (simulating loose mounting or older motor)
-        if np.random.random() < 0.30:
-            noise_level = np.random.uniform(0.10, 0.18) # Very noisy healthy
-        else:
-            noise_level = np.random.uniform(0.03, 0.08) # Normal healthy
-            
-        noise = np.random.normal(0, noise_level, len(t))
-        signal = base_signal + noise
+# ============================================================
+# FAULT CLASS DEFINITIONS
+# ============================================================
+# 0 = HEALTHY
+# 1 = BEARING_INNER_RACE  (BPFI harmonics + sidebands, high kurtosis)
+# 2 = ROTOR_UNBALANCE     (dominant 1X frequency, low kurtosis)
+# 3 = MISALIGNMENT        (dominant 2X frequency, axial vibration)
+# 4 = LOOSENESS           (sub-harmonic 0.5X + broadband noise)
 
-    else:
-        # Faulty Motor (Outer Race Fault)
-        # 30% chance of the fault being "Incipient" (Just starting, very quiet)
-        if np.random.random() < 0.30:
-            fault_amp = 0.015  # Barely audible fault
-        else:
-            fault_amp = np.random.uniform(0.04, 0.10) # Clear fault
+FAULT_NAMES = {
+    0: "HEALTHY",
+    1: "BEARING_INNER_RACE",
+    2: "ROTOR_UNBALANCE",
+    3: "MISALIGNMENT",
+    4: "LOOSENESS"
+}
 
-        # Add Periodic Impacts (Fault Signature)
-        impact_freq = 200 # Hz
-        impact_signal = fault_amp * np.sin(2 * np.pi * impact_freq * t)
-        
-        # Add random background clicks (simulating factory clatter)
-        clicks = np.random.normal(0, 0.06, len(t))
-        
-        signal = base_signal + impact_signal + clicks
+# ============================================================
+# PHYSICS-BASED SIGNAL GENERATOR
+# ============================================================
+SAMPLE_RATE = 20000  # 20 kHz — standard for bearing diagnostics
+DURATION    = 0.5    # 0.5 second window per sample
+SHAFT_FREQ  = 30     # Hz — 1800 RPM / 60 = 30 Hz
 
-    return signal
+# Bearing geometry constants (SKF 6205-2RS typical values)
+NUM_BALLS       = 9
+BALL_DIAMETER   = 7.94   # mm
+PITCH_DIAMETER  = 38.5   # mm
+CONTACT_ANGLE   = 0      # degrees (radial bearing)
 
-# --- 2. SOTA FEATURE EXTRACTION ---
-def extract_features(signal):
-    rms = np.sqrt(np.mean(signal**2))
-    kurtosis = pd.Series(signal).kurtosis()
-    peak = np.max(np.abs(signal))
-    
-    # FFT (Energy in high frequencies)
-    fft_vals = np.abs(fft(signal))
-    fft_vals = fft_vals[:len(signal)//2] / len(signal)
-    high_freq_energy = np.sum(fft_vals[1000:]) 
-    
-    return [rms, kurtosis, peak, high_freq_energy]
+# Characteristic defect frequencies (multiples of shaft freq)
+BPFI = SHAFT_FREQ * (NUM_BALLS / 2) * (1 + (BALL_DIAMETER / PITCH_DIAMETER))  # ≈ 162 Hz
+BPFO = SHAFT_FREQ * (NUM_BALLS / 2) * (1 - (BALL_DIAMETER / PITCH_DIAMETER))  # ≈ 108 Hz
+BSF  = SHAFT_FREQ * (PITCH_DIAMETER / (2 * BALL_DIAMETER)) * (1 - (BALL_DIAMETER / PITCH_DIAMETER)**2)  # ≈ 71 Hz
 
-# --- 3. EXECUTION PIPELINE ---
-def run_realistic_pipeline():
-    print("==================================================")
-    print("   🏭 GENERATING HYPER-REALISTIC INDUSTRIAL DATA")
-    print("   (Simulating heavy noise/overlap for real-world accuracy)")
-    print("==================================================\n")
-    
-    data = []
-    labels = []
-    
-    # Generate 500 Healthy Samples
-    print("   Generating 500 Healthy signatures (w/ variability)...")
-    for _ in range(500):
-        sig = generate_bearing_signal(is_faulty=False)
-        data.append(extract_features(sig))
-        labels.append(0)
-        
-    # Generate 500 Faulty Samples
-    print("   Generating 500 Faulty signatures (w/ incipient faults)...")
-    for _ in range(500):
-        sig = generate_bearing_signal(is_faulty=True)
-        data.append(extract_features(sig))
-        labels.append(1)
-        
-    X = np.array(data)
-    y = np.array(labels)
-    feature_names = ['RMS', 'Kurtosis', 'Peak', 'FFT_Energy']
-    
-    # Train/Test Split
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    
-    # Train Gradient Boosting 
-    # Reduced depth/estimators to prevent overfitting on the synthetic patterns
-    print("\n   🧠 Training Model...")
-    model = GradientBoostingClassifier(n_estimators=40, learning_rate=0.05, max_depth=2, random_state=42)
-    model.fit(X_train, y_train)
-    
-    # Evaluate
-    preds = model.predict(X_test)
-    acc = accuracy_score(y_test, preds)
-    
-    print(f"\n   ✅ REALISTIC ACCURACY: {acc*100:.2f}%")
-    print("   (This lower accuracy proves the data includes real-world ambiguity)")
-    
-    # --- VISUALIZATION OF "CONS" (DEPLOYABILITY PROOF) ---
-    print("\n   Generating Deployability Analysis Plots...")
-    
-    # 1. Confusion Matrix
-    plt.figure(figsize=(12, 5))
-    
-    plt.subplot(1, 2, 1)
+
+def generate_signal(fault_type=0, severity=1.0, sample_rate=SAMPLE_RATE, duration=DURATION):
+    """
+    Generate a realistic vibration signal for a given fault type and severity.
+    severity: 0.0 (incipient) → 1.0 (advanced fault)
+    """
+    t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
+
+    # Always-present shaft rotation component
+    base = 0.05 * np.sin(2 * np.pi * SHAFT_FREQ * t)
+
+    # ── HEALTHY ──────────────────────────────────────────────────────────────
+    if fault_type == 0:
+        noise_level = np.random.uniform(0.02, 0.07)
+        # 25% chance of "noisy healthy" to prevent overconfidence
+        if np.random.random() < 0.25:
+            noise_level = np.random.uniform(0.08, 0.14)
+        return base + np.random.normal(0, noise_level, len(t))
+
+    # ── BEARING INNER RACE FAULT ──────────────────────────────────────────────
+    elif fault_type == 1:
+        # Physics: periodic impacts at BPFI, modulated by shaft rotation
+        # Results in high kurtosis, sidebands around BPFI
+        amp = severity * np.random.uniform(0.05, 0.12)
+        # Primary BPFI harmonic
+        impact = amp * np.sin(2 * np.pi * BPFI * t)
+        # First sideband (BPFI ± shaft_freq) — key diagnostic signature
+        sb1 = (amp * 0.4) * np.sin(2 * np.pi * (BPFI + SHAFT_FREQ) * t)
+        sb2 = (amp * 0.4) * np.sin(2 * np.pi * (BPFI - SHAFT_FREQ) * t)
+        # 2nd harmonic
+        h2  = (amp * 0.25) * np.sin(2 * np.pi * (2 * BPFI) * t)
+        noise = np.random.normal(0, 0.04, len(t))
+        # Incipient fault simulation — 20% chance of barely-detectable fault
+        if severity < 0.3:
+            amp *= 0.2
+        return base + impact + sb1 + sb2 + h2 + noise
+
+    # ── ROTOR UNBALANCE ───────────────────────────────────────────────────────
+    elif fault_type == 2:
+        # Physics: pure 1X forced vibration — low kurtosis, high RMS
+        amp = severity * np.random.uniform(0.15, 0.35)
+        unbalance = amp * np.sin(2 * np.pi * SHAFT_FREQ * t + np.random.uniform(0, 2*np.pi))
+        # Very small harmonics (nearly pure sinusoid)
+        h2 = (amp * 0.05) * np.sin(2 * np.pi * 2 * SHAFT_FREQ * t)
+        noise = np.random.normal(0, 0.02, len(t))
+        return base + unbalance + h2 + noise
+
+    # ── SHAFT MISALIGNMENT ────────────────────────────────────────────────────
+    elif fault_type == 3:
+        # Physics: dominant 2X, significant axial component, some 1X
+        amp_2x = severity * np.random.uniform(0.10, 0.22)
+        amp_1x = amp_2x * np.random.uniform(0.3, 0.6)
+        misalign_2x = amp_2x * np.sin(2 * np.pi * 2 * SHAFT_FREQ * t)
+        misalign_1x = amp_1x * np.sin(2 * np.pi * SHAFT_FREQ * t + np.pi / 3)
+        # Some 3X as well for angular misalignment
+        h3 = (amp_2x * 0.3) * np.sin(2 * np.pi * 3 * SHAFT_FREQ * t)
+        noise = np.random.normal(0, 0.03, len(t))
+        return base + misalign_1x + misalign_2x + h3 + noise
+
+    # ── MECHANICAL LOOSENESS ──────────────────────────────────────────────────
+    elif fault_type == 4:
+        # Physics: sub-harmonics (0.5X), broadband noise floor, chaotic response
+        amp_sub = severity * np.random.uniform(0.06, 0.14)
+        sub_harm = amp_sub * np.sin(2 * np.pi * 0.5 * SHAFT_FREQ * t)
+        # Multiple shaft harmonics (truncation of nonlinear response)
+        harmonics = sum(
+            (amp_sub / k) * np.sin(2 * np.pi * k * SHAFT_FREQ * t)
+            for k in range(1, 6)
+        )
+        # High broadband noise floor (chaotic looseness)
+        broadband = np.random.normal(0, severity * 0.10, len(t))
+        return base + sub_harm + harmonics + broadband
+
+    return base + np.random.normal(0, 0.03, len(t))
+
+
+# ============================================================
+# FEATURE EXTRACTION  (7 features per sample)
+# ============================================================
+
+def extract_features(signal, sample_rate=SAMPLE_RATE):
+    """
+    Extract time-domain and frequency-domain features.
+    Feature vector: [RMS, Kurtosis, Crest_Factor, Sub_Sync_Energy, Sync_Energy, High_Freq_Energy, Spectral_Kurtosis]
+    """
+    # ── Time Domain ──────────────────────────────────────────
+    rms     = np.sqrt(np.mean(signal ** 2))
+    peak    = np.max(np.abs(signal))
+    kurt    = float(pd.Series(signal).kurtosis())
+    crest   = peak / (rms + 1e-9)
+
+    # ── Frequency Domain ─────────────────────────────────────
+    N = len(signal)
+    fft_vals = np.abs(fft(signal))[:N // 2] / N
+    freqs    = fftfreq(N, 1 / sample_rate)[:N // 2]
+
+    # Frequency band energy (key discriminative features)
+    def band_energy(f_low, f_high):
+        mask = (freqs >= f_low) & (freqs < f_high)
+        return float(np.sum(fft_vals[mask] ** 2))
+
+    sub_sync_energy  = band_energy(5,  25)    # Sub-synchronous: looseness
+    sync_energy      = band_energy(25, 75)    # Synchronous: unbalance / misalign
+    high_freq_energy = band_energy(75, 500)   # High freq: bearing defects
+
+    # Spectral kurtosis (broadband randomness indicator — looseness diagnostic)
+    psd = fft_vals ** 2
+    psd_norm = psd / (np.sum(psd) + 1e-12)
+    spec_kurt = float(pd.Series(psd_norm).kurtosis())
+
+    return [rms, kurt, crest, sub_sync_energy, sync_energy, high_freq_energy, spec_kurt]
+
+
+FEATURE_NAMES = ['RMS', 'Kurtosis', 'Crest_Factor', 'Sub_Sync_Energy', 'Sync_Energy', 'High_Freq_Energy', 'Spectral_Kurtosis']
+
+
+# ============================================================
+# DATA GENERATION
+# ============================================================
+
+def generate_dataset(samples_per_class=600):
+    print("\n  Generating physics-based multi-class dataset...")
+    X, y = [], []
+
+    for fault_type in range(5):
+        name = FAULT_NAMES[fault_type]
+        print(f"    [{fault_type}] {name}: {samples_per_class} samples")
+        for _ in range(samples_per_class):
+            # Random severity — uniform for healthy, weighted towards higher for faults
+            if fault_type == 0:
+                severity = np.random.uniform(0.0, 0.3)
+            else:
+                # 20% incipient (low severity) — real-world class imbalance
+                severity = np.random.uniform(0.1, 0.3) if np.random.random() < 0.20 else np.random.uniform(0.4, 1.0)
+
+            sig = generate_signal(fault_type=fault_type, severity=severity)
+            X.append(extract_features(sig))
+            y.append(fault_type)
+
+    return np.array(X), np.array(y)
+
+
+# ============================================================
+# MAIN TRAINING PIPELINE
+# ============================================================
+
+def run_pipeline():
+    print("=" * 60)
+    print("  INDUSTRIAL PREDICTIVE MAINTENANCE — MODEL TRAINING")
+    print("  Multi-Class Fault Classifier + Anomaly Health Scorer")
+    print("=" * 60)
+
+    # ── 1. Generate Dataset ───────────────────────────────────
+    X, y = generate_dataset(samples_per_class=600)
+    print(f"\n  Total samples: {len(X)}  |  Features: {X.shape[1]}  |  Classes: {len(np.unique(y))}")
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
+
+    # ── 2. Train Multi-Class GBM Classifier ──────────────────
+    print("\n  Training Gradient Boosting Classifier (multi-class)...")
+    clf = GradientBoostingClassifier(
+        n_estimators=120,
+        learning_rate=0.08,
+        max_depth=4,
+        subsample=0.85,
+        min_samples_leaf=8,
+        random_state=42
+    )
+    clf.fit(X_train, y_train)
+
+    preds   = clf.predict(X_test)
+    acc     = accuracy_score(y_test, preds)
+    print(f"\n  ✅ Multi-Class Accuracy: {acc * 100:.2f}%")
+    print("\n  Classification Report:")
+    print(classification_report(y_test, preds, target_names=[FAULT_NAMES[i] for i in range(5)]))
+
+    # ── 3. Train Isolation Forest (Health Scorer) ─────────────
+    # Trained ONLY on healthy data — gives anomaly score for any input
+    print("  Training Isolation Forest (anomaly health scorer)...")
+    X_healthy = X[y == 0]
+    iso = IsolationForest(n_estimators=200, contamination=0.05, random_state=42)
+    iso.fit(X_healthy)
+    print("  ✅ Isolation Forest trained on healthy baseline.")
+
+    # ── 4. Confusion Matrix Plot ──────────────────────────────
+    print("\n  Generating evaluation plots...")
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+    fig.patch.set_facecolor('#0b0e14')
+    for ax in axes:
+        ax.set_facecolor('#151a23')
+
     cm = confusion_matrix(y_test, preds)
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Reds', xticklabels=['Normal', 'Fault'], yticklabels=['Normal', 'Fault'])
-    plt.title(f'Confusion Matrix (Acc: {acc*100:.1f}%)')
-    plt.ylabel('Actual')
-    plt.xlabel('Predicted')
+    class_labels = [FAULT_NAMES[i] for i in range(5)]
+    sns.heatmap(cm, annot=True, fmt='d', cmap='YlOrRd',
+                xticklabels=class_labels, yticklabels=class_labels,
+                ax=axes[0], linewidths=0.5, linecolor='#1e293b')
+    axes[0].set_title(f'Confusion Matrix  (Acc: {acc*100:.1f}%)', color='white', pad=15, fontsize=13)
+    axes[0].set_ylabel('Actual', color='#94a3b8')
+    axes[0].set_xlabel('Predicted', color='#94a3b8')
+    axes[0].tick_params(colors='#94a3b8')
+    plt.setp(axes[0].get_xticklabels(), rotation=30, ha='right', fontsize=8, color='#94a3b8')
+    plt.setp(axes[0].get_yticklabels(), rotation=0, fontsize=8, color='#94a3b8')
 
-    # 2. Decision Boundary / "Cons" Plot
-    # Shows RMS vs Kurtosis and where the model fails
-    plt.subplot(1, 2, 2)
-    df_vis = pd.DataFrame(X_test, columns=feature_names)
-    df_vis['Ground Truth'] = ['Fault' if x==1 else 'Normal' for x in y_test]
-    df_vis['Prediction'] = ['Fault' if x==1 else 'Normal' for x in preds]
-    df_vis['Correct'] = df_vis['Ground Truth'] == df_vis['Prediction']
-    
-    # Plot Correct Points
-    sns.scatterplot(data=df_vis[df_vis['Correct']==True], x='RMS', y='Kurtosis', hue='Ground Truth', style='Ground Truth', alpha=0.3)
-    # Plot Errors (The "Cons")
-    sns.scatterplot(data=df_vis[df_vis['Correct']==False], x='RMS', y='Kurtosis', color='red', marker='X', s=100, label='Misclassified (The "Cons")')
-    
-    plt.title('Deployability Limits: Where does it fail?')
-    plt.xlabel('Vibration Level (RMS)')
-    plt.ylabel('Impact Level (Kurtosis)')
-    plt.legend()
-    
+    # Feature Importance plot
+    importances = clf.feature_importances_
+    sorted_idx  = np.argsort(importances)
+    axes[1].barh([FEATURE_NAMES[i] for i in sorted_idx], importances[sorted_idx],
+                 color=['#0ea5e9' if i > 3 else '#f59e0b' for i in sorted_idx])
+    axes[1].set_title('Feature Importance', color='white', pad=15, fontsize=13)
+    axes[1].tick_params(colors='#94a3b8')
+    axes[1].set_facecolor('#151a23')
+    for spine in axes[1].spines.values():
+        spine.set_edgecolor('#1e293b')
+
     plt.tight_layout()
-    plt.show() 
-    
-    # Save Model
-    if not os.path.exists('ml_model'): os.makedirs('ml_model')
-    save_path = os.path.join('ml_model', 'sota_model_final.pkl')
-    joblib.dump(model, save_path)
-    print(f"   💾 Model saved to {save_path}")
+    os.makedirs('ml_model', exist_ok=True)
+    plt.savefig('ml_model/training_report.png', dpi=150, bbox_inches='tight', facecolor='#0b0e14')
+    print("  📊 Saved: ml_model/training_report.png")
+
+    # ── 5. Save Models ────────────────────────────────────────
+    joblib.dump(clf, 'ml_model/sota_model_final.pkl')
+    joblib.dump(iso, 'ml_model/health_scorer.pkl')
+    joblib.dump(FEATURE_NAMES, 'ml_model/feature_names.pkl')
+
+    print("\n  💾 Models saved:")
+    print("     ml_model/sota_model_final.pkl  (multi-class fault classifier)")
+    print("     ml_model/health_scorer.pkl     (isolation forest health scorer)")
+    print("\n" + "=" * 60)
+    print("  Training complete. Run: python dashboard/app.py")
+    print("=" * 60 + "\n")
+
 
 if __name__ == "__main__":
-    run_realistic_pipeline()
+    run_pipeline()
