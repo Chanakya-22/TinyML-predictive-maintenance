@@ -1,17 +1,7 @@
 """
-AssetGuard AI — Edge Gateway Server
-====================================
+AssetGuard AI - Edge Gateway Server
+=====================================
 Production-grade predictive maintenance backend.
-
-Features:
-- Flask-SocketIO real-time push (replaces client polling)
-- SQLite telemetry persistence with CSV export
-- Multi-class fault classification (5 fault types)
-- Isolation Forest health score (0–100%)
-- Remaining Useful Life (RUL) estimation via degradation trend
-- 5-level ISO 10816-inspired severity staging
-- Per-fault probability breakdown via predict_proba()
-- Live FFT spectrum generation per cycle
 """
 
 from flask import Flask, render_template, jsonify, Response
@@ -31,17 +21,27 @@ from scipy.fft import fft, fftfreq
 # ============================================================
 # FLASK / SOCKETIO SETUP
 # ============================================================
-app    = Flask(__name__)
+app      = Flask(__name__)
 app.config['SECRET_KEY'] = 'assetguard-2025'
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # ============================================================
 # PATHS
 # ============================================================
-BASE_DIR         = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_PATH       = os.path.join(BASE_DIR, 'ml_model', 'sota_model_final.pkl')
-SCORER_PATH      = os.path.join(BASE_DIR, 'ml_model', 'health_scorer.pkl')
-DB_PATH          = os.path.join(BASE_DIR, 'data', 'telemetry.db')
+BASE_DIR    = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODEL_PATH  = os.path.join(BASE_DIR, 'ml_model', 'sota_model_final.pkl')
+SCORER_PATH = os.path.join(BASE_DIR, 'ml_model', 'health_scorer.pkl')
+DB_PATH     = os.path.join(BASE_DIR, 'data', 'telemetry.db')
+
+# ============================================================
+# INFERENCE GATE THRESHOLDS
+# If BOTH rms and kurtosis are below these, the signal is
+# physically incapable of containing a fault signature.
+# We hard-gate the ML model and return HEALTHY directly.
+# This prevents the model from misfiring on boot/low-value readings.
+# ============================================================
+GATE_RMS_MAX  = 0.08   # g   — below this: clearly no fault vibration
+GATE_KURT_MAX = 3.0    # —   — below this: no impulsive content
 
 # ============================================================
 # FAULT KNOWLEDGE BASE
@@ -65,64 +65,94 @@ FAULT_DISPLAY = {
 REPAIR_GUIDE = {
     "HEALTHY": {
         "title": "System Operating Nominally",
-        "detail": "All vibration and thermal parameters within ISO 10816 Zone A limits. Efficiency: 98.2%. Next scheduled inspection: 720 operating hours.",
+        "detail": "All vibration and thermal parameters within ISO 10816 Zone A limits. "
+                  "Efficiency: 98.2%. Next scheduled inspection: 720 operating hours.",
         "actions": [],
-        "urgency": "NONE"
+        "urgency_floor": "NONE"
     },
     "BEARING_INNER_RACE": {
-        "title": "⚠ Inner Race Bearing Defect Detected",
-        "detail": "Spectral analysis confirms BPFI harmonic signature with shaft-frequency sidebands. Indicative of inner race spalling on the drive-end bearing.",
+        "title": "Inner Race Bearing Defect Detected",
+        "detail": "Spectral analysis confirms BPFI harmonic signature with shaft-frequency "
+                  "sidebands. Indicative of inner race spalling on the drive-end bearing.",
         "actions": [
             "Isolate and degrease drive-end bearing housing",
             "Replace SKF 6205-2RS or equivalent bearing",
             "Verify lubrication: use Mobilux EP2 grease, 12g per cavity",
-            "Re-inspect after 24h run-in; re-baseline vibration"
+            "Re-inspect after 24h run-in and re-baseline vibration"
         ],
-        "urgency": "HIGH"
+        "urgency_floor": "HIGH"
     },
     "ROTOR_UNBALANCE": {
-        "title": "⚠ Rotor Assembly Imbalance",
-        "detail": "Dominant 1X frequency component detected. Phase analysis indicates static unbalance on the fan rotor. Common cause: debris accumulation or missing balance weight.",
+        "title": "Rotor Assembly Imbalance Detected",
+        "detail": "Dominant 1X frequency component detected. Phase analysis indicates static "
+                  "unbalance on the fan rotor. Common cause: debris accumulation or missing "
+                  "balance weight.",
         "actions": [
             "Shut down and lock out / tag out (LOTO)",
-            "Inspect and clean all fan blades — remove debris",
+            "Inspect and clean all fan blades - remove debris",
             "Check for missing or shifted balance correction weights",
             "Dynamic balance to ISO 1940-1 Grade G2.5 or better"
         ],
-        "urgency": "MEDIUM"
+        "urgency_floor": "MEDIUM"
     },
     "MISALIGNMENT": {
-        "title": "⚠ Shaft / Coupling Misalignment",
-        "detail": "Elevated 2X harmonic with significant axial vibration component detected. Consistent with angular or parallel coupling misalignment.",
+        "title": "Shaft / Coupling Misalignment Detected",
+        "detail": "Elevated 2X harmonic with significant axial vibration component detected. "
+                  "Consistent with angular or parallel coupling misalignment.",
         "actions": [
             "Measure and record current alignment with dial gauge or laser tool",
             "Correct soft-foot condition at all mounting pads first",
-            "Align shaft to ≤ 0.05mm parallel / ≤ 0.05mm/100mm angular",
+            "Align shaft to <= 0.05mm parallel and <= 0.05mm/100mm angular",
             "Re-torque coupling bolts to spec after alignment"
         ],
-        "urgency": "MEDIUM"
+        "urgency_floor": "MEDIUM"
     },
     "LOOSENESS": {
-        "title": "⚠ Mechanical Looseness / Resonance",
-        "detail": "Sub-harmonic (0.5X) and broadband spectral content detected. Indicates structural looseness at bearing housing, foundation bolts, or resonant baseplate.",
+        "title": "Mechanical Looseness / Resonance Detected",
+        "detail": "Sub-harmonic (0.5X) and broadband spectral content detected. Indicates "
+                  "structural looseness at bearing housing, foundation bolts, or resonant "
+                  "baseplate.",
         "actions": [
             "Inspect and torque all foundation anchor bolts",
-            "Check anti-vibration mount condition — replace if hardened",
+            "Check anti-vibration mount condition - replace if hardened",
             "Inspect bearing housing set screws and end-shields",
             "Perform bump test to identify resonant frequency"
         ],
-        "urgency": "LOW"
+        "urgency_floor": "LOW"
     }
 }
 
-# ISO 10816-3 inspired severity thresholds (for 15kW+ motors, rigid mounting)
+# Urgency rank for max() comparison
+URGENCY_RANK = {"NONE": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3}
+
+# Maps severity stage to a dynamic urgency level
+SEVERITY_TO_URGENCY = {
+    "HEALTHY":  "NONE",
+    "WATCH":    "LOW",
+    "WARNING":  "MEDIUM",
+    "ALERT":    "HIGH",
+    "CRITICAL": "HIGH"
+}
+
+# ISO 10816-3 inspired RMS+Kurtosis thresholds
 SEVERITY_LEVELS = [
-    # (label,        color,     rms_max, kurtosis_max)
-    ("HEALTHY",   "success",   0.07,    3.0),
-    ("WATCH",     "info",      0.13,    4.0),
-    ("WARNING",   "warning",   0.22,    5.5),
-    ("ALERT",     "orange",    0.38,    7.0),
-    ("CRITICAL",  "danger",    9999,    9999),
+    # (label,       rms_max,  kurtosis_max)
+    ("HEALTHY",    0.07,     3.0),
+    ("WATCH",      0.13,     4.0),
+    ("WARNING",    0.22,     5.5),
+    ("ALERT",      0.38,     7.0),
+    ("CRITICAL",   9999,     9999),
+]
+
+# Health score thresholds — used to reconcile with RMS-based severity
+# so the two systems agree with each other
+HEALTH_TO_SEVERITY = [
+    # (min_health, severity)  — descending order
+    (80, "HEALTHY"),
+    (60, "WATCH"),
+    (40, "WARNING"),
+    (20, "ALERT"),
+    (0,  "CRITICAL"),
 ]
 
 # ============================================================
@@ -149,16 +179,18 @@ def init_db():
     ''')
     conn.execute('''
         CREATE TABLE IF NOT EXISTS fault_events (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp   TEXT NOT NULL,
-            fault_label TEXT,
-            severity    TEXT,
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp    TEXT NOT NULL,
+            fault_label  TEXT,
+            severity     TEXT,
+            urgency      TEXT,
             health_score REAL,
-            rms         REAL
+            rms          REAL
         )
     ''')
     conn.commit()
     conn.close()
+
 
 def log_reading(data: dict):
     try:
@@ -174,24 +206,27 @@ def log_reading(data: dict):
         ))
         if data['fault_code'] != 0:
             conn.execute('''
-                INSERT INTO fault_events (timestamp, fault_label, severity, health_score, rms)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (data['timestamp'], data['fault_label'], data['severity'],
-                  data['health_score'], data['rms']))
+                INSERT INTO fault_events (timestamp, fault_label, severity, urgency, health_score, rms)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (
+                data['timestamp'], data['fault_label'], data['severity'],
+                data.get('guide_urgency', 'UNKNOWN'), data['health_score'], data['rms']
+            ))
         conn.commit()
         conn.close()
     except Exception as e:
         print(f"DB write error: {e}")
 
+
 # ============================================================
 # GLOBAL STATE
 # ============================================================
 start_time  = time.time()
-rms_history = deque(maxlen=300)   # rolling window for RUL trend
+rms_history = deque(maxlen=300)
 
 sim_state = {
-    "RMS": 0.01, "Kurtosis": 0.0, "Temp": 25.0, "FanSpeed": 0,
-    "CrestFactor": 1.0
+    "RMS": 0.01, "Kurtosis": 0.0, "Temp": 25.0,
+    "FanSpeed": 0, "CrestFactor": 1.0
 }
 
 # ============================================================
@@ -203,32 +238,32 @@ scorer = None
 if os.path.exists(MODEL_PATH):
     try:
         clf = joblib.load(MODEL_PATH)
-        print(f"✅ Classifier loaded: {MODEL_PATH}")
+        print(f"Classifier loaded: {MODEL_PATH}")
     except Exception as e:
-        print(f"⚠  Classifier load failed: {e}")
+        print(f"Classifier load failed: {e}")
 
 if os.path.exists(SCORER_PATH):
     try:
         scorer = joblib.load(SCORER_PATH)
-        print(f"✅ Health scorer loaded: {SCORER_PATH}")
+        print(f"Health scorer loaded: {SCORER_PATH}")
     except Exception as e:
-        print(f"⚠  Health scorer load failed: {e}")
+        print(f"Health scorer load failed: {e}")
 
 # ============================================================
-# DEMO LOOP — Scripted 240-second cycle
+# DEMO LOOP - Scripted 240-second cycle
 # ============================================================
 DEMO_CYCLE = 240
 
 def get_demo_mode():
     elapsed = int(time.time() - start_time)
     t = elapsed % DEMO_CYCLE
-    if t < 18:   return "BOOT_SEQUENCE"
-    if t < 55:   return "HEALTHY"
-    if t < 115:  return "BEARING_WEAR"
-    if t < 145:  return "HEALTHY"
-    if t < 195:  return "UNBALANCE"
-    if t < 215:  return "HEALTHY"
-    if t < 240:  return "MISALIGNMENT"
+    if t < 18:  return "BOOT_SEQUENCE"
+    if t < 55:  return "HEALTHY"
+    if t < 115: return "BEARING_WEAR"
+    if t < 145: return "HEALTHY"
+    if t < 195: return "UNBALANCE"
+    if t < 215: return "HEALTHY"
+    if t < 240: return "MISALIGNMENT"
     return "HEALTHY"
 
 TARGET_PROFILES = {
@@ -257,163 +292,247 @@ def update_sim_state(mode):
     return sim_state
 
 # ============================================================
-# HEALTH SCORE (0–100)
+# HEALTH SCORE (0-100)
 # ============================================================
 def compute_health_score(rms, kurtosis, crest_factor, iso_model):
     """
-    Uses Isolation Forest decision_function to map anomaly distance → 0–100 health score.
-    100 = pristine baseline, 0 = severely anomalous.
+    Returns a 0-100 health score where 100 = perfect, 0 = imminent failure.
+
+    Three-tier logic to keep it consistent with what the human sees:
+    1. Clearly healthy zone (rms < GATE_RMS_MAX and kurtosis < GATE_KURT_MAX):
+       Return 80-95 based on how deep in the zone we are.
+       Prevents IsolationForest from returning 38% on low-value readings.
+
+    2. Fault zone with IsolationForest available:
+       Use decision_function and map to 0-100.
+
+    3. Fallback heuristic if no model loaded.
     """
-    if iso_model is None:
-        # Heuristic fallback
-        score = max(0, 100 - (rms * 180) - (max(0, kurtosis - 3) * 8))
-        return round(float(np.clip(score, 0, 100)), 1)
+    # Tier 1: hard-gate for clearly healthy readings
+    if rms < GATE_RMS_MAX and kurtosis < GATE_KURT_MAX:
+        rms_ratio  = rms / GATE_RMS_MAX          # 0.0 - 1.0
+        kurt_ratio = kurtosis / GATE_KURT_MAX     # 0.0 - 1.0
+        score = 95 - (rms_ratio * 10) - (kurt_ratio * 5)
+        return round(float(np.clip(score, 80, 95)), 1)
 
-    try:
-        sub_e  = rms * 0.3
-        sync_e = rms * 0.5
-        hf_e   = rms * 0.8 if kurtosis > 4.5 else rms * 0.2
-        spec_k = kurtosis * 0.4
-        feats  = np.array([[rms, kurtosis, crest_factor, sub_e, sync_e, hf_e, spec_k]])
-        raw    = float(iso_model.decision_function(feats)[0])
-        # decision_function: positive = normal, negative = anomalous
-        # typical range: -0.3 to +0.15
-        health = np.interp(raw, [-0.35, 0.15], [0, 100])
-        return round(float(np.clip(health, 0, 100)), 1)
-    except Exception:
-        score = max(0, 100 - (rms * 180) - (max(0, kurtosis - 3) * 8))
-        return round(float(np.clip(score, 0, 100)), 1)
+    # Tier 2: IsolationForest for degraded readings
+    if iso_model is not None:
+        try:
+            sub_e  = rms * 0.3
+            sync_e = rms * 0.5
+            hf_e   = rms * 0.8 if kurtosis > 4.5 else rms * 0.2
+            spec_k = kurtosis * 0.4
+            feats  = np.array([[rms, kurtosis, crest_factor, sub_e, sync_e, hf_e, spec_k]])
+            raw    = float(iso_model.decision_function(feats)[0])
+            # decision_function: positive = normal, negative = anomalous
+            # typical range: -0.3 to +0.15
+            health = np.interp(raw, [-0.35, 0.15], [0, 100])
+            return round(float(np.clip(health, 0, 100)), 1)
+        except Exception:
+            pass
+
+    # Tier 3: heuristic fallback
+    score = max(0, 100 - (rms * 150) - (max(0, kurtosis - 3) * 10))
+    return round(float(np.clip(score, 0, 100)), 1)
+
 
 # ============================================================
-# SEVERITY STAGING
+# SEVERITY STAGING  (FIX: reconciled with health score)
 # ============================================================
-def get_severity(rms, kurtosis):
-    for label, color, rms_max, kurtosis_max in SEVERITY_LEVELS:
+def _rms_kurtosis_severity(rms, kurtosis):
+    """Raw-threshold-based severity."""
+    for label, rms_max, kurtosis_max in SEVERITY_LEVELS:
         if rms <= rms_max and kurtosis <= kurtosis_max:
-            return label, color
-    return "CRITICAL", "danger"
+            return label
+    return "CRITICAL"
+
+def _health_score_severity(health_score):
+    """Health-score-based severity."""
+    for min_h, label in HEALTH_TO_SEVERITY:
+        if health_score >= min_h:
+            return label
+    return "CRITICAL"
+
+SEV_RANK = {"HEALTHY": 0, "WATCH": 1, "WARNING": 2, "ALERT": 3, "CRITICAL": 4}
+
+def get_severity(rms, kurtosis, health_score):
+    """
+    Returns the WORSE of (raw-threshold severity) and (health-score severity).
+    This ensures the two systems are always consistent — if the health score
+    thinks the asset is WARNING but raw thresholds say HEALTHY, WARNING wins.
+    Previously the two systems could point in opposite directions, causing
+    the 'HEALTHY pill + 38% gauge' contradiction seen in the screenshot.
+    """
+    s1 = _rms_kurtosis_severity(rms, kurtosis)
+    s2 = _health_score_severity(health_score)
+    return s1 if SEV_RANK[s1] >= SEV_RANK[s2] else s2
+
+
+# ============================================================
+# DYNAMIC URGENCY RESOLUTION
+# ============================================================
+def resolve_urgency(fault_label: str, severity: str) -> str:
+    """
+    Returns max(severity-implied urgency, fault-type urgency floor).
+    A bearing fault is always at least HIGH.
+    Any fault at ALERT or CRITICAL is always HIGH regardless of type.
+    """
+    if fault_label == "HEALTHY":
+        return "NONE"
+    dynamic = SEVERITY_TO_URGENCY.get(severity, "MEDIUM")
+    floor   = REPAIR_GUIDE.get(fault_label, {}).get("urgency_floor", "LOW")
+    return dynamic if URGENCY_RANK.get(dynamic, 0) >= URGENCY_RANK.get(floor, 0) else floor
+
 
 # ============================================================
 # RUL ESTIMATION
 # ============================================================
-FAILURE_THRESHOLD_RMS = 0.75  # RMS value considered "failure"
+FAILURE_THRESHOLD_RMS = 0.75
 
 def estimate_rul(current_rms):
-    """
-    Fits a linear degradation trend over the rolling RMS history.
-    Returns estimated cycles to reach failure threshold, or None if insufficient data.
-    """
     rms_history.append(current_rms)
-
     if len(rms_history) < 30:
         return None
-
-    x    = np.arange(len(rms_history), dtype=float)
-    y    = np.array(rms_history, dtype=float)
-    slope, intercept = np.polyfit(x, y, 1)
-
+    x = np.arange(len(rms_history), dtype=float)
+    y = np.array(rms_history, dtype=float)
+    slope, _ = np.polyfit(x, y, 1)
     if slope <= 1e-6:
-        return 9999  # Not degrading
-
+        return 9999
     cycles = (FAILURE_THRESHOLD_RMS - current_rms) / slope
     return max(0, int(cycles))
 
+
 # ============================================================
-# FFT SPECTRUM (sent to frontend for live spectrum chart)
+# FFT SPECTRUM
 # ============================================================
-SHAFT_FREQ = 30   # Hz
+SHAFT_FREQ = 30  # Hz
 
 def generate_fft_spectrum(rms, kurtosis, crest_factor, mode, sample_rate=20000, n_points=0.5):
-    """
-    Generate a synthetic but physically plausible FFT spectrum for display.
-    Returns lists of (frequencies, amplitudes) for the first 500 Hz.
-    """
-    N  = int(sample_rate * n_points)
-    t  = np.linspace(0, n_points, N, endpoint=False)
-
+    N    = int(sample_rate * n_points)
+    t    = np.linspace(0, n_points, N, endpoint=False)
     base = 0.05 * np.sin(2 * np.pi * SHAFT_FREQ * t)
 
     if mode == "BEARING_WEAR":
         BPFI = 162.0
         amp  = rms * 1.2
-        sig  = base + amp * np.sin(2 * np.pi * BPFI * t) \
-                    + (amp * 0.4) * np.sin(2 * np.pi * (BPFI + SHAFT_FREQ) * t) \
-                    + np.random.normal(0, rms * 0.3, N)
+        sig  = (base
+                + amp * np.sin(2 * np.pi * BPFI * t)
+                + (amp * 0.4) * np.sin(2 * np.pi * (BPFI + SHAFT_FREQ) * t)
+                + np.random.normal(0, rms * 0.3, N))
     elif mode == "UNBALANCE":
         amp = rms * 1.5
-        sig = base + amp * np.sin(2 * np.pi * SHAFT_FREQ * t) \
-                   + np.random.normal(0, rms * 0.1, N)
+        sig = (base
+               + amp * np.sin(2 * np.pi * SHAFT_FREQ * t)
+               + np.random.normal(0, rms * 0.1, N))
     elif mode == "MISALIGNMENT":
         amp = rms * 1.0
-        sig = base + amp * np.sin(2 * np.pi * 2 * SHAFT_FREQ * t) \
-                   + (amp * 0.5) * np.sin(2 * np.pi * 3 * SHAFT_FREQ * t) \
-                   + np.random.normal(0, rms * 0.15, N)
+        sig = (base
+               + amp * np.sin(2 * np.pi * 2 * SHAFT_FREQ * t)
+               + (amp * 0.5) * np.sin(2 * np.pi * 3 * SHAFT_FREQ * t)
+               + np.random.normal(0, rms * 0.15, N))
+    elif mode == "LOOSENESS":
+        amp = rms * 0.8
+        sig = (base
+               + amp * np.sin(2 * np.pi * 0.5 * SHAFT_FREQ * t)
+               + np.random.normal(0, rms * 0.4, N))
     else:
-        sig = base + np.random.normal(0, rms * 0.5, N)
+        sig = base + np.random.normal(0, max(rms, 0.01) * 0.5, N)
 
-    fft_mag  = np.abs(fft(sig))[:N // 2] / N
-    freqs    = fftfreq(N, 1 / sample_rate)[:N // 2]
-
-    # Downsample to 200 bins up to 500 Hz for frontend
-    mask     = freqs <= 500
-    f_sel    = freqs[mask]
-    a_sel    = fft_mag[mask]
-    step     = max(1, len(f_sel) // 200)
+    fft_mag = np.abs(fft(sig))[:N // 2] / N
+    freqs   = fftfreq(N, 1 / sample_rate)[:N // 2]
+    mask    = freqs <= 500
+    f_sel   = freqs[mask]
+    a_sel   = fft_mag[mask]
+    step    = max(1, len(f_sel) // 200)
     return f_sel[::step].tolist(), a_sel[::step].tolist()
 
+
 # ============================================================
-# INFERENCE
+# INFERENCE  (FIX: hard gate prevents ML misfires on low values)
 # ============================================================
 def run_inference(rms, kurtosis, crest_factor, mode):
     """
-    Run multi-class fault classification and return fault code,
-    label, probabilities, health score, severity, RUL, and repair guide.
+    Multi-class fault inference with three-layer consistency guarantee:
+
+    Layer 1 - Hard gate:
+      If rms < GATE_RMS_MAX AND kurtosis < GATE_KURT_MAX the signal is
+      physically too clean to contain a fault signature. Skip the ML model
+      entirely and return HEALTHY. This stops the model from predicting
+      'LOOSENESS 92%' on a 0.024g RMS reading during boot/low-speed phases.
+
+    Layer 2 - ML classifier:
+      Run the model only when the gate passes. Use heuristic fallback if
+      the model is unavailable or raises an error.
+
+    Layer 3 - Severity reconciliation:
+      Derive severity from BOTH raw thresholds AND health score, then take
+      the worse result. This ensures the status pill and gauge always agree.
+      Previously they used completely separate systems that contradicted each other.
     """
-    # Feature vector must match train_final.py extract_features()
-    sub_e  = rms * 0.3
-    sync_e = rms * 0.5
-    hf_e   = rms * 0.8 if kurtosis > 4.5 else rms * 0.2
-    spec_k = kurtosis * 0.4
-    feats  = np.array([[rms, kurtosis, crest_factor, sub_e, sync_e, hf_e, spec_k]])
 
-    fault_code  = 0
-    fault_proba = [1.0, 0.0, 0.0, 0.0, 0.0]
+    # --- Layer 1: Hard gate -------------------------------------------
+    gated_healthy = (rms < GATE_RMS_MAX and kurtosis < GATE_KURT_MAX)
 
-    if clf is not None:
-        try:
-            fault_code  = int(clf.predict(feats)[0])
-            fault_proba = clf.predict_proba(feats)[0].tolist()
-        except Exception as e:
-            print(f"Inference error: {e}")
+    if gated_healthy:
+        fault_code  = 0
+        fault_proba = [1.0, 0.0, 0.0, 0.0, 0.0]
+    else:
+        # --- Layer 2: ML classifier -----------------------------------
+        sub_e  = rms * 0.3
+        sync_e = rms * 0.5
+        hf_e   = rms * 0.8 if kurtosis > 4.5 else rms * 0.2
+        spec_k = kurtosis * 0.4
+        feats  = np.array([[rms, kurtosis, crest_factor, sub_e, sync_e, hf_e, spec_k]])
+
+        fault_code  = 0
+        fault_proba = [1.0, 0.0, 0.0, 0.0, 0.0]
+
+        if clf is not None:
+            try:
+                fault_code  = int(clf.predict(feats)[0])
+                fault_proba = clf.predict_proba(feats)[0].tolist()
+            except Exception as e:
+                print(f"Inference error: {e}")
+                fault_code  = _heuristic_fault(rms, kurtosis)
+                fault_proba = _heuristic_proba(fault_code)
+        else:
             fault_code  = _heuristic_fault(rms, kurtosis)
             fault_proba = _heuristic_proba(fault_code)
-    else:
-        fault_code  = _heuristic_fault(rms, kurtosis)
-        fault_proba = _heuristic_proba(fault_code)
 
     fault_label = FAULT_NAMES.get(fault_code, "UNKNOWN")
-    health      = compute_health_score(rms, kurtosis, crest_factor, scorer)
-    severity, _ = get_severity(rms, kurtosis)
-    rul         = estimate_rul(rms)
-    guide       = REPAIR_GUIDE.get(fault_label, REPAIR_GUIDE["HEALTHY"])
 
-    return {
-        "fault_code":     fault_code,
-        "fault_label":    fault_label,
-        "fault_display":  FAULT_DISPLAY.get(fault_code, fault_label),
-        "fault_proba":    [round(p * 100, 1) for p in fault_proba],
-        "health_score":   health,
-        "severity":       severity,
-        "rul_cycles":     rul,
-        "guide":          guide,
+    # --- Layer 3: Severity reconciliation ----------------------------
+    health   = compute_health_score(rms, kurtosis, crest_factor, scorer)
+    severity = get_severity(rms, kurtosis, health)   # takes worse of two systems
+    rul      = estimate_rul(rms)
+    urgency  = resolve_urgency(fault_label, severity)
+
+    base_guide = REPAIR_GUIDE.get(fault_label, REPAIR_GUIDE["HEALTHY"])
+    guide = {
+        "title":   base_guide["title"],
+        "detail":  base_guide["detail"],
+        "actions": base_guide["actions"],
+        "urgency": urgency
     }
 
+    return {
+        "fault_code":    fault_code,
+        "fault_label":   fault_label,
+        "fault_display": FAULT_DISPLAY.get(fault_code, fault_label),
+        "fault_proba":   [round(p * 100, 1) for p in fault_proba],
+        "health_score":  health,
+        "severity":      severity,
+        "rul_cycles":    rul,
+        "guide":         guide,
+    }
+
+
 def _heuristic_fault(rms, kurtosis):
-    if rms < 0.10 and kurtosis < 3.5:   return 0
-    if kurtosis > 5.5:                   return 1  # Bearing
-    if rms > 0.35 and kurtosis < 3.5:   return 2  # Unbalance
-    if 0.15 < rms < 0.35:               return 3  # Misalignment
-    if kurtosis > 3.5:                  return 4  # Looseness
+    if rms < 0.10 and kurtosis < 3.5:  return 0
+    if kurtosis > 5.5:                  return 1  # Bearing
+    if rms > 0.35 and kurtosis < 3.5:  return 2  # Unbalance
+    if 0.15 < rms < 0.35:              return 3  # Misalignment
+    if kurtosis > 3.5:                 return 4  # Looseness
     return 0
 
 def _heuristic_proba(fault_code):
@@ -421,14 +540,15 @@ def _heuristic_proba(fault_code):
     proba[fault_code] = 0.80
     return proba
 
+
 # ============================================================
 # BACKGROUND TELEMETRY TASK (WebSocket push every 500ms)
 # ============================================================
 def telemetry_loop():
     while True:
         try:
-            mode    = get_demo_mode()
-            state   = update_sim_state(mode)
+            mode         = get_demo_mode()
+            state        = update_sim_state(mode)
 
             rms          = round(max(0.001, state["RMS"]), 4)
             kurtosis     = round(max(0.01,  state["Kurtosis"]), 2)
@@ -437,38 +557,35 @@ def telemetry_loop():
             crest_factor = round(max(1.0, state["CrestFactor"]), 2)
             timestamp    = datetime.datetime.now().strftime("%H:%M:%S")
 
-            infer = run_inference(rms, kurtosis, crest_factor, mode)
+            infer       = run_inference(rms, kurtosis, crest_factor, mode)
             freqs, amps = generate_fft_spectrum(rms, kurtosis, crest_factor, mode)
 
             payload = {
-                "timestamp":    timestamp,
-                "mode":         mode,
-                # Raw sensors
-                "rms":          rms,
-                "kurtosis":     kurtosis,
-                "crest_factor": crest_factor,
-                "temp":         temp,
-                "speed":        speed,
-                # Diagnostics
-                "fault_code":   infer["fault_code"],
-                "fault_label":  infer["fault_label"],
-                "fault_display":infer["fault_display"],
-                "fault_proba":  infer["fault_proba"],
-                "health_score": infer["health_score"],
-                "severity":     infer["severity"],
-                "rul_cycles":   infer["rul_cycles"],
-                # Repair guide
-                "guide_title":  infer["guide"]["title"],
-                "guide_detail": infer["guide"]["detail"],
-                "guide_actions":infer["guide"]["actions"],
-                "guide_urgency":infer["guide"]["urgency"],
-                # FFT spectrum
-                "fft_freqs":    freqs,
-                "fft_amps":     amps,
+                "timestamp":     timestamp,
+                "mode":          mode,
+                "rms":           rms,
+                "kurtosis":      kurtosis,
+                "crest_factor":  crest_factor,
+                "temp":          temp,
+                "speed":         speed,
+                "fault_code":    infer["fault_code"],
+                "fault_label":   infer["fault_label"],
+                "fault_display": infer["fault_display"],
+                "fault_proba":   infer["fault_proba"],
+                "health_score":  infer["health_score"],
+                "severity":      infer["severity"],
+                "rul_cycles":    infer["rul_cycles"],
+                "guide_title":   infer["guide"]["title"],
+                "guide_detail":  infer["guide"]["detail"],
+                "guide_actions": infer["guide"]["actions"],
+                "guide_urgency": infer["guide"]["urgency"],
+                "fft_freqs":     freqs,
+                "fft_amps":      amps,
             }
 
             socketio.emit('telemetry', payload)
-            log_reading({**payload, "fault_code": infer["fault_code"],
+            log_reading({**payload,
+                         "fault_code":  infer["fault_code"],
                          "fault_label": infer["fault_label"]})
 
         except Exception as e:
@@ -487,7 +604,6 @@ def index():
 
 @app.route('/api/history')
 def api_history():
-    """Last 120 readings for trend overlay charts."""
     try:
         conn = sqlite3.connect(DB_PATH)
         rows = conn.execute(
@@ -506,17 +622,16 @@ def api_history():
 
 @app.route('/api/alerts')
 def api_alerts():
-    """Recent fault events."""
     try:
         conn = sqlite3.connect(DB_PATH)
         rows = conn.execute(
-            'SELECT timestamp, fault_label, severity, health_score, rms '
+            'SELECT timestamp, fault_label, severity, urgency, health_score, rms '
             'FROM fault_events ORDER BY id DESC LIMIT 25'
         ).fetchall()
         conn.close()
         return jsonify([
             {"timestamp": r[0], "fault_label": r[1], "severity": r[2],
-             "health_score": r[3], "rms": r[4]}
+             "urgency": r[3], "health_score": r[4], "rms": r[5]}
             for r in rows
         ])
     except Exception as e:
@@ -525,15 +640,15 @@ def api_alerts():
 
 @app.route('/api/export/csv')
 def export_csv():
-    """Download all telemetry as CSV."""
     try:
         conn = sqlite3.connect(DB_PATH)
         rows = conn.execute('SELECT * FROM readings ORDER BY id').fetchall()
         conn.close()
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(['id','timestamp','rms','kurtosis','crest_factor','temp','speed',
-                         'health_score','severity','fault_code','fault_label','rul_cycles'])
+        writer.writerow(['id', 'timestamp', 'rms', 'kurtosis', 'crest_factor', 'temp',
+                         'speed', 'health_score', 'severity', 'fault_code', 'fault_label',
+                         'rul_cycles'])
         writer.writerows(rows)
         return Response(
             output.getvalue(), mimetype='text/csv',
@@ -545,19 +660,18 @@ def export_csv():
 
 @app.route('/api/stats')
 def api_stats():
-    """Summary statistics for the session."""
     try:
-        conn = sqlite3.connect(DB_PATH)
-        total    = conn.execute('SELECT COUNT(*) FROM readings').fetchone()[0]
-        faults   = conn.execute("SELECT COUNT(*) FROM readings WHERE fault_code != 0").fetchone()[0]
-        avg_rms  = conn.execute('SELECT AVG(rms) FROM readings').fetchone()[0]
+        conn       = sqlite3.connect(DB_PATH)
+        total      = conn.execute('SELECT COUNT(*) FROM readings').fetchone()[0]
+        faults     = conn.execute("SELECT COUNT(*) FROM readings WHERE fault_code != 0").fetchone()[0]
+        avg_rms    = conn.execute('SELECT AVG(rms) FROM readings').fetchone()[0]
         avg_health = conn.execute('SELECT AVG(health_score) FROM readings').fetchone()[0]
         conn.close()
-        uptime   = int(time.time() - start_time)
+        uptime = int(time.time() - start_time)
         return jsonify({
             "total_readings": total,
             "fault_events":   faults,
-            "avg_rms":        round(avg_rms or 0, 4),
+            "avg_rms":        round(avg_rms    or 0, 4),
             "avg_health":     round(avg_health or 0, 1),
             "uptime_seconds": uptime
         })
@@ -581,10 +695,12 @@ if __name__ == '__main__':
     socketio.start_background_task(telemetry_loop)
 
     print("=" * 55)
-    print("  🚀  AssetGuard AI — Edge Gateway Server")
-    print("  📡  WebSocket push @ 2Hz")
-    print("  🧠  Multi-class fault classifier + Health scorer")
-    print("  💾  SQLite logging → data/telemetry.db")
-    print("  🌐  http://127.0.0.1:5000")
+    print("  AssetGuard AI - Edge Gateway Server")
+    print("  WebSocket push @ 2Hz")
+    print("  Multi-class classifier + Health scorer")
+    print("  Hard-gated inference - no false positives on boot")
+    print("  Severity reconciled across health score + thresholds")
+    print("  SQLite logging -> data/telemetry.db")
+    print("  http://127.0.0.1:5000")
     print("=" * 55)
     socketio.run(app, debug=False, port=5000, allow_unsafe_werkzeug=True)

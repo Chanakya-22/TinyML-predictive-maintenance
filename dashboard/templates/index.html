@@ -1116,6 +1116,11 @@ socket.on('telemetry', data => {
     $('severityBadge').textContent = sev;
 
     // ── Digital Twin ─────────────────────────────────────────
+    // isAlarming = severity is genuinely elevated (WARNING or worse).
+    // We deliberately do NOT use fault_code here because fault_code can
+    // misfire during boot/low-value phases even when severity is HEALTHY.
+    // The single source of truth for all visual alarm state is severity.
+    const isAlarming = ['WARNING', 'ALERT', 'CRITICAL'].includes(data.severity);
     const motor    = $('motor');
     const glow     = $('motorGlow');
     motor.className = 'motor-ring';
@@ -1123,12 +1128,11 @@ socket.on('telemetry', data => {
     if (data.mode === 'BOOT_SEQUENCE') {
         motor.classList.add('slow-spin');
         motor.style.animationDuration = '2.5s';
-    } else if (data.fault_code !== 0) {
+    } else if (isAlarming) {
         motor.classList.add('shaking');
         glow.classList.add('fault');
     } else {
         motor.classList.add('spinning');
-        motor.style.animationDuration = clamp(0.3, 0.2, 0.9) + 's';
         const speed_pct = clamp(data.speed / 1800, 0.2, 1.0);
         motor.style.animationDuration = (1.0 / speed_pct * 0.55) + 's';
     }
@@ -1156,9 +1160,10 @@ socket.on('telemetry', data => {
         actionsEl.appendChild(div);
     });
 
-    // AI panel border color
-    const panelColor = data.fault_code === 0 ? 'var(--accent)' :
-                       data.severity === 'CRITICAL' ? 'var(--danger)' : 'var(--warning)';
+    // AI panel border color — follows severity, not fault_code
+    const panelColor = data.severity === 'CRITICAL' || data.severity === 'ALERT' ? 'var(--danger)' :
+                       data.severity === 'WARNING'  ? 'var(--warning)' :
+                       data.severity === 'WATCH'    ? 'var(--info)' : 'var(--accent)';
     $('aiPanel').style.borderLeftColor = panelColor;
 
     // ── Fault Probability Bars ───────────────────────────────
@@ -1177,8 +1182,8 @@ socket.on('telemetry', data => {
     trendChart.data.labels.shift();
     trendChart.data.datasets[0].data.push(data.rms);
     trendChart.data.datasets[0].data.shift();
-    trendChart.data.datasets[0].borderColor     = data.fault_code !== 0 ? '#ef4444' : '#3b82f6';
-    trendChart.data.datasets[0].backgroundColor = data.fault_code !== 0
+    trendChart.data.datasets[0].borderColor     = isAlarming ? '#ef4444' : '#3b82f6';
+    trendChart.data.datasets[0].backgroundColor = isAlarming
         ? 'rgba(239,68,68,0.15)' : trendGrad;
     trendChart.update();
 
@@ -1196,26 +1201,28 @@ socket.on('telemetry', data => {
         fftChart.data.labels    = data.fft_freqs.map(f => f.toFixed(1));
         fftChart.data.datasets[0].data = data.fft_amps;
 
-        // Color fault frequencies
+        // Color fault frequencies — base color follows severity not fault_code
         const barColors = data.fft_freqs.map(f => {
             if (Math.abs(f - 162) < 5 || Math.abs(f - 108) < 5)  return 'rgba(239,68,68,0.7)';
             if (Math.abs(f - 60)  < 4 || Math.abs(f - 90) < 4)   return 'rgba(6,182,212,0.7)';
             if (Math.abs(f - 30)  < 4)                             return 'rgba(245,158,11,0.7)';
-            return data.fault_code !== 0 ? 'rgba(239,68,68,0.25)' : 'rgba(59,130,246,0.35)';
+            return isAlarming ? 'rgba(239,68,68,0.25)' : 'rgba(59,130,246,0.35)';
         });
         fftChart.data.datasets[0].backgroundColor = barColors;
-        fftChart.data.datasets[0].borderColor = data.fault_code !== 0 ? '#ef4444' : '#3b82f6';
+        fftChart.data.datasets[0].borderColor = isAlarming ? '#ef4444' : '#3b82f6';
         fftChart.update();
     }
 
     // ── Event Log ─────────────────────────────────────────────
-    const statusKey = data.mode + '_' + data.fault_code;
+    const statusKey = data.mode + '_' + data.severity;
     if (statusKey !== lastLogStatus) {
         let msg, cls;
         if (data.mode === 'BOOT_SEQUENCE') {
             msg = 'System boot sequence initiated'; cls = 'log-boot';
-        } else if (data.fault_code !== 0) {
+        } else if (isAlarming) {
             msg = `FAULT DETECTED: ${data.fault_display} — Severity: ${data.severity}`; cls = 'log-crit';
+        } else if (data.severity === 'WATCH') {
+            msg = `WATCH: ${data.fault_display} — Health: ${data.health_score.toFixed(0)}%`; cls = 'log-warn';
         } else {
             msg = `System nominal — Health: ${data.health_score.toFixed(0)}%`; cls = 'log-ok';
         }
